@@ -1,0 +1,11 @@
+[package]
+name = "crdt"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+keyhive_core = { path = "keyhive/keyhive_core" }
+tokio = { version = "1.0", features = ["full"] }
+blake3 = "1.5"
+rand = "0.8.5"
+nonempty = { version = "0.10.0", features = ["serialize"] }
