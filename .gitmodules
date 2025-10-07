@@ -1,3 +1,6 @@
 [submodule "keyhive"]
 	path = keyhive
 	url = https://github.com/inkandswitch/keyhive
+[submodule "capnweb"]
+	path = capnweb
+	url = https://github.com/cloudflare/capnweb.git
