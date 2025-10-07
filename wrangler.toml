@@ -1,0 +1,19 @@
+name = "beelay-worker"
+main = "worker.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[durable_objects]
+bindings = [
+  { name = "BEELAY_DO", class_name = "BeelayDO" }
+]
+
+[[migrations]]
+tag = "v1"
+new_classes = ["BeelayDO"]
+
+[build]
+#command = "npm run build"  # If you have a build step, otherwise remove
+
+# Optional: Add your Cloudflare account ID if needed
+# account_id = "your-account-id"

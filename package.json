@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "ts-node --esm example.ts"
+    "start": "ts-node --esm example.ts",
+    "client": "ts-node --esm client.ts"
   },
   "devDependencies": {
     "ts-node": "^10.9.1",
