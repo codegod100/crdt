@@ -34,6 +34,7 @@
 - **Strict mode**: Enabled - all code must pass strict TypeScript checks
 - **Naming**: camelCase for variables/functions, PascalCase for types/classes
 - **Error handling**: Use try/catch with descriptive error messages
+- **Validation logging**: When encountering invalid input or data, add logging to explain why it's invalid
 - **Copyright**: Include Cloudflare copyright header on all files
 
 ### Rust

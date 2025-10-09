@@ -16,12 +16,37 @@ export interface CRDTDoc {
   lastModified: number;
 }
 
+export interface Channel {
+  id: string;
+  name: string;
+  docId: string;
+  createdAt: number;
+  lastModified: number;
+}
+
+export interface Message {
+  id: string;
+  channelId: string;
+  user: string;
+  content: string;
+  timestamp: number;
+  commitHash: string;
+}
+
 class SQLiteService {
   private db: any = null;
   private isInitialized = false;
+  private initPromise: Promise<void> | null = null;
 
   async initialize(): Promise<void> {
     if (this.isInitialized) return;
+    if (this.initPromise) return this.initPromise;
+
+    this.initPromise = this._initialize();
+    return this.initPromise;
+  }
+
+  private async _initialize(): Promise<void> {
 
     try {
       console.log('Initializing SQLite WASM...');
@@ -93,6 +118,7 @@ class SQLiteService {
 
       } catch (fallbackError: any) {
         console.error('❌ Failed to initialize SQLite fallback:', fallbackError);
+        this.initPromise = null; // Reset on failure
         throw new Error(`SQLite initialization failed: ${fallbackError.message}`);
       }
     }
@@ -117,10 +143,32 @@ class SQLiteService {
         FOREIGN KEY (doc_id) REFERENCES documents (id)
       );
 
+       CREATE TABLE IF NOT EXISTS channels (
+         id TEXT PRIMARY KEY,
+         name TEXT NOT NULL,
+         doc_id TEXT,
+         created_at INTEGER NOT NULL,
+         last_modified INTEGER NOT NULL,
+         FOREIGN KEY (doc_id) REFERENCES documents (id)
+       );
+
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        user TEXT NOT NULL,
+        content TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        commit_hash TEXT NOT NULL,
+        FOREIGN KEY (channel_id) REFERENCES channels (id)
+      );
+
       CREATE INDEX IF NOT EXISTS idx_commits_doc_id ON commits (doc_id);
       CREATE INDEX IF NOT EXISTS idx_commits_hash ON commits (hash);
       CREATE INDEX IF NOT EXISTS idx_commits_timestamp ON commits (timestamp);
       CREATE INDEX IF NOT EXISTS idx_documents_last_modified ON documents (last_modified);
+      CREATE INDEX IF NOT EXISTS idx_channels_doc_id ON channels (doc_id);
+      CREATE INDEX IF NOT EXISTS idx_messages_channel_id ON messages (channel_id);
+      CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages (timestamp);
     `;
 
     if (this.db && typeof this.db === 'function') {
@@ -363,6 +411,8 @@ class SQLiteService {
     await this.ensureInitialized();
 
     const sql = `
+      DELETE FROM messages;
+      DELETE FROM channels;
       DELETE FROM commits;
       DELETE FROM documents;
     `;
@@ -374,6 +424,190 @@ class SQLiteService {
       // Using direct DB API
       this.db.exec(sql);
     }
+  }
+
+  async createChannel(name: string): Promise<Channel> {
+    await this.ensureInitialized();
+
+    const channelId = `chan-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    // Save channel with temporary docId
+    const tempDocId = `temp-${channelId}`;
+    const channel: Channel = {
+      id: channelId,
+      name,
+      docId: tempDocId,
+      createdAt: Date.now(),
+      lastModified: Date.now()
+    };
+
+    const sql = `
+      INSERT INTO channels (id, name, doc_id, created_at, last_modified)
+      VALUES (?, ?, ?, ?, ?)
+    `;
+
+    if (this.db && typeof this.db === 'function') {
+      await this.db('exec', {
+        sql,
+        bind: [channel.id, channel.name, channel.docId, channel.createdAt, channel.lastModified]
+      });
+    } else if (this.db && this.db.exec) {
+      this.db.exec(sql, {
+        bind: [channel.id, channel.name, channel.docId, channel.createdAt, channel.lastModified]
+      });
+    }
+
+    return channel;
+  }
+
+  async getAllChannels(): Promise<Channel[]> {
+    await this.ensureInitialized();
+
+    const sql = 'SELECT * FROM channels ORDER BY last_modified DESC';
+
+    if (this.db && typeof this.db === 'function') {
+      const result = await this.db('exec', {
+        sql,
+        returnValue: 'resultRows'
+      });
+
+      let rows: any[];
+      if (Array.isArray(result)) {
+        rows = result;
+      } else if (result.result && result.result.resultRows) {
+        rows = result.result.resultRows;
+      } else if (result.resultRows) {
+        rows = result.resultRows;
+      } else if (result.result) {
+        rows = result.result;
+      } else {
+        rows = [];
+      }
+
+      if (!Array.isArray(rows)) {
+        console.error('getAllChannels: rows is not an array after processing:', rows, 'result:', result);
+        return [];
+      }
+
+      return rows.map((row: any[]) => ({
+        id: row[0],
+        name: row[1],
+        docId: row[2] || `temp-${row[0]}`,
+        createdAt: row[3],
+        lastModified: row[4]
+      }));
+    } else if (this.db && this.db.selectObjects) {
+      const rows = this.db.selectObjects(sql);
+      if (!Array.isArray(rows)) {
+        console.warn('getAllChannels: rows is not an array:', rows);
+        return [];
+      }
+      return rows.map((row: any) => ({
+        id: row.id,
+        name: row.name,
+        docId: row.doc_id || `temp-${row.id}`,
+        createdAt: row.created_at,
+        lastModified: row.last_modified
+      }));
+    }
+
+    return [];
+  }
+
+  async updateChannelDocId(channelId: string, docId: string): Promise<void> {
+    await this.ensureInitialized();
+
+    const sql = `
+      UPDATE channels SET doc_id = ?, last_modified = ? WHERE id = ?
+    `;
+
+    if (this.db && typeof this.db === 'function') {
+      await this.db('exec', {
+        sql,
+        bind: [docId, Date.now(), channelId]
+      });
+    } else if (this.db && this.db.exec) {
+      this.db.exec(sql, {
+        bind: [docId, Date.now(), channelId]
+      });
+    }
+  }
+
+  async saveMessage(message: Message): Promise<void> {
+    await this.ensureInitialized();
+
+    const sql = `
+      INSERT INTO messages (id, channel_id, user, content, timestamp, commit_hash)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `;
+
+    if (this.db && typeof this.db === 'function') {
+      await this.db('exec', {
+        sql,
+        bind: [message.id, message.channelId, message.user, message.content, message.timestamp, message.commitHash]
+      });
+    } else if (this.db && this.db.exec) {
+      this.db.exec(sql, {
+        bind: [message.id, message.channelId, message.user, message.content, message.timestamp, message.commitHash]
+      });
+    }
+  }
+
+  async getMessagesForChannel(channelId: string): Promise<Message[]> {
+    await this.ensureInitialized();
+
+    const sql = 'SELECT * FROM messages WHERE channel_id = ? ORDER BY timestamp ASC';
+
+    if (this.db && typeof this.db === 'function') {
+      const result = await this.db('exec', {
+        sql,
+        bind: [channelId],
+        returnValue: 'resultRows'
+      });
+
+      let rows: any[];
+      if (Array.isArray(result)) {
+        rows = result;
+      } else if (result.result && result.result.resultRows) {
+        rows = result.result.resultRows;
+      } else if (result.resultRows) {
+        rows = result.resultRows;
+      } else if (result.result) {
+        rows = result.result;
+      } else {
+        rows = [];
+      }
+
+      if (!Array.isArray(rows)) {
+        console.error('getMessagesForChannel: rows is not an array after processing:', rows, 'result:', result);
+        return [];
+      }
+
+      return rows.map((row: any[]) => ({
+        id: row[0],
+        channelId: row[1],
+        user: row[2],
+        content: row[3],
+        timestamp: row[4],
+        commitHash: row[5]
+      }));
+    } else if (this.db && this.db.selectObjects) {
+      const rows = this.db.selectObjects(sql, [channelId]);
+      if (!Array.isArray(rows)) {
+        console.warn('getMessagesForChannel: rows is not an array:', rows);
+        return [];
+      }
+      return rows.map((row: any) => ({
+        id: row.id,
+        channelId: row.channel_id,
+        user: row.user,
+        content: row.content,
+        timestamp: row.timestamp,
+        commitHash: row.commit_hash
+      }));
+    }
+
+    return [];
   }
 
   private async ensureInitialized(): Promise<void> {
