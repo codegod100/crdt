@@ -1,9 +1,1 @@
-[submodule "keyhive"]
-	path = keyhive
-	url = https://github.com/inkandswitch/keyhive
-[submodule "capnweb"]
-	path = capnweb
-	url = https://github.com/cloudflare/capnweb.git
-[submodule "sqlite-wasm"]
-	path = sqlite-wasm
-	url = https://github.com/sqlite/sqlite-wasm.git
+
