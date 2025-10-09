@@ -401,21 +401,59 @@ class BeelayHandler extends RpcTarget {
   }
 
   async loadDocument(docId: string) {
-    // Temporarily use mock with base64
-    // const beelay = await this.getBeelay();
-    // const commits = await beelay.loadDocument(docId);
-    // Wrap: return plain JSON with base64 for binary
-    return [{
-      parents: [],
-      hash: "initial",
-      contents: btoa("Hello")
-    }];
+    const beelay = await this.getBeelay();
+    const commits = await beelay.loadDocument(docId);
+
+    // Convert commits to plain JSON with base64 for binary contents
+    if (!commits) return [];
+
+    return commits.map(commit => {
+      if (commit.type === 'commit') {
+        return {
+          parents: commit.parents,
+          hash: commit.hash,
+          contents: btoa(String.fromCharCode(...commit.contents))
+        };
+      }
+      // Handle bundle types if needed
+      return commit;
+    });
   }
 
   async addCommits(options: any) {
     const beelay = await this.getBeelay();
     await beelay.addCommits(options);
     return { success: true };
+  }
+
+  async addWorkerCommit(docId: string, content: string) {
+    const beelay = await this.getBeelay();
+
+    // Get current document state to create a proper commit
+    const currentCommits = await beelay.loadDocument(docId);
+    if (!currentCommits || currentCommits.length === 0) {
+      throw new Error('Document not found or empty');
+    }
+
+    // Find the latest commit hash
+    const latestCommit = currentCommits[currentCommits.length - 1];
+    if (latestCommit.type !== 'commit') {
+      throw new Error('Latest item is not a commit');
+    }
+
+    // Create a new commit (use TextEncoder instead of Buffer)
+    const contents = new TextEncoder().encode(content);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', contents) as ArrayBuffer;
+    const hash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+
+    const newCommit = {
+      parents: [latestCommit.hash],
+      hash,
+      contents
+    };
+
+    await beelay.addCommits({ docId, commits: [newCommit] });
+    return { success: true, commitHash: hash };
   }
 
   async createContactCard() {
