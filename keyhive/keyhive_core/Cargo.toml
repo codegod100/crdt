@@ -1,0 +1,87 @@
+[package]
+
+name = "keyhive_core"
+version = "0.1.0"
+description = "Core Beehive types and functions"
+
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+# Docs
+aquamarine = { version = "0.6", optional = true }
+
+# Encoding
+bincode = { workspace = true }
+serde = { workspace = true }
+
+# Crypto
+blake3 = { workspace = true }
+chacha20poly1305 = { workspace = true }
+ed25519-dalek = { workspace = true }
+rand = { workspace = true }
+signature = { workspace = true }
+x25519-dalek = { workspace = true }
+
+# Error Handling
+thiserror = { workspace = true }
+
+# Utilities
+derivative = "2.2"
+derive_more = { workspace = true }
+derive-where = "1.2"
+dupe = { workspace = true }
+futures = { workspace = true }
+nonempty = { workspace = true }
+topological-sort = "0.2"
+tracing = { workspace = true }
+trait-variant = "0.1.2"
+
+# Testing
+proptest = { version = "1.5", optional = true }
+proptest-derive = { version = "0.5.0", optional = true }
+arbitrary = { workspace = true, optional = true }
+prettytable-rs = { version = "0.10.0", optional = true }
+
+[dev-dependencies]
+keyhive_core = { path = ".", features = ["test_utils", "debug_events"] }
+test-utils = { path = "../test-utils" }
+
+arbitrary.workspace = true
+lazy_static = "1.5"
+tokio = { version = "1.43", features = [
+    "macros",
+    "rt",
+    "sync",
+    "rt-multi-thread",
+] }
+tokio-test = "0.4.4"
+
+# Benchmarks
+divan = "0.1.15"
+
+# Test Helpers
+hex.workspace = true
+pretty_assertions = "1.4"
+testresult = "0.4.1"
+tracing-subscriber = { version = "0.3.19", features = ["ansi", "env-filter"] }
+
+[features]
+default = []
+debug_events = ["prettytable-rs"]
+mermaid_docs = ["aquamarine"]
+sendable = []
+test_utils = ["proptest", "proptest-derive", "ingest_static"]
+ingest_static = []
+
+[[bench]]
+name = "bench_cgka"
+harness = false
+required-features = ["test_utils"]
+
+[lints.clippy]
+doc_overindented_list_items = "allow"
