@@ -1,59 +1,113 @@
-// Connect to the worker's WebSocket endpoint
-// Assuming wrangler dev runs on localhost:8787
-const ws = new WebSocket("ws://localhost:8787");
+import { newWebSocketRpcSession, RpcStub, RpcTarget } from "./capnweb/dist/index.js";
 
-let nextId = 1;
-const pending = new Map();
-
-ws.onopen = () => {
-  console.log("Connected to worker");
-  main();
-};
-
-ws.onmessage = (event) => {
-  const msg = JSON.parse(event.data);
-  const { result, error, id } = msg;
-  const { resolve, reject } = pending.get(id);
-  pending.delete(id);
-  if (error) {
-    reject(new Error(error));
-  } else {
-    resolve(result);
-  }
-};
-
-ws.onerror = (error) => {
-  console.error("WebSocket error:", error);
-};
-
-function call(method: string, ...params: any[]) {
-  return new Promise((resolve, reject) => {
-    const id = nextId++;
-    pending.set(id, { resolve, reject });
-    ws.send(JSON.stringify({ method, params, id }));
-  });
+interface CommitSnapshot {
+  parents: string[];
+  hash: string;
+  contents: unknown;
 }
 
+interface CreateDocOptions {
+  initialCommit: {
+    parents: string[];
+    hash: string;
+    contents: Uint8Array;
+  };
+  otherParents: unknown[];
+}
+
+interface CreateDocResult {
+  id: string;
+}
+
+interface BeelayApi extends RpcTarget {
+  createDoc(options: CreateDocOptions): CreateDocResult;
+  loadDocument(docId: string): CommitSnapshot[];
+  addCommits(options: unknown): { success: boolean };
+  createContactCard(): { card: string };
+  createStream(options: unknown): { streamId: string };
+  waitUntilSynced(peerId: string): { synced: boolean };
+  stop(): void;
+  hello(name: string): string;
+}
+
+function encodeUtf8(value: string): Uint8Array {
+  return new TextEncoder().encode(value);
+}
+
+function toUint8Array(data: unknown): Uint8Array {
+  if (data instanceof Uint8Array) {
+    return data;
+  }
+
+  if (typeof data === "string") {
+    try {
+      return Uint8Array.from(Buffer.from(data, "base64"));
+    } catch {
+      return Uint8Array.from(Buffer.from(data));
+    }
+  }
+
+  if (Array.isArray(data)) {
+    return new Uint8Array(data);
+  }
+
+  throw new Error("Unsupported commit contents format");
+}
+
+async function disposeStub(stub: RpcStub<BeelayApi>) {
+  const disposer = (stub as any)[Symbol.asyncDispose] ?? (stub as any)[Symbol.dispose];
+  if (typeof disposer === "function") {
+    await disposer.call(stub);
+  }
+}
+
+
+
 async function main() {
+  console.log('Client starting...');
+
+  const rpc = newWebSocketRpcSession<BeelayApi>("ws://localhost:8787");
+  rpc.onRpcBroken((error) => {
+    console.error("RPC connection lost:", error);
+    if (error.message && error.message.includes('URL')) {
+      console.error('URL-related RPC error detected!');
+      console.error('Full error:', error);
+    }
+  });
+
   try {
-    // Call Beelay method
-    const result = await call("createDoc", {
-      initialCommit: { parents: [], hash: "initial", contents: Array.from(new Uint8Array(Buffer.from("Hello"))) },
-      otherParents: []
-    });
-    console.log("Document created:", result.id);
+    console.log("Connected to worker via capnweb RPC");
 
-    // Example: Load document
-    const commits = await call("loadDocument", result.id);
-    // Decode base64 contents
-    commits.forEach((commit: any) => {
-      commit.contents = new Uint8Array(atob(commit.contents).split('').map(c => c.charCodeAt(0)));
+    const initialCommitContents = encodeUtf8("Hello");
+    const createResult = await rpc.createDoc({
+      initialCommit: {
+        parents: [],
+        hash: "initial",
+        contents: initialCommitContents,
+      },
+      otherParents: [],
     });
-    console.log("Loaded commits:", commits);
 
+    console.log("Document created:", createResult.id);
+
+    const commits = await rpc.loadDocument(createResult.id) as any;
+    console.log("Raw commits response:", commits);
+
+    if (Array.isArray(commits)) {
+      const decodedCommits = commits.map((commit: any) => ({
+        ...commit,
+        contents: toUint8Array(commit.contents),
+      }));
+
+      console.log("Loaded commits:", decodedCommits);
+    } else {
+      console.log("Commits is not an array:", typeof commits, commits);
+    }
   } catch (error) {
     console.error("Error:", error);
   } finally {
-    ws.close();
+    await disposeStub(rpc);
   }
 }
+
+void main();
