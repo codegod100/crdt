@@ -1,7 +1,15 @@
 import { useState, useRef, useEffect } from 'react'
-import { newWebSocketRpcSession, RpcStub } from 'capnweb'
+import { newWebSocketRpcSession, RpcStub, RpcTarget } from 'capnweb'
 import { sqliteService, type Channel, type Message } from './sqliteService'
 import './App.css'
+
+const symbolDispose: symbol = typeof (Symbol as { dispose?: symbol }).dispose === 'symbol'
+  ? (Symbol as { dispose: symbol }).dispose
+  : Symbol.for('Symbol.dispose')
+
+type DisposableStub = {
+  [symbolDispose]?: () => void
+}
 
 interface CommitSnapshot {
   parents: string[];
@@ -32,6 +40,27 @@ interface BeelayApi {
   waitUntilSynced(peerId: string): Promise<{ synced: boolean }>;
   stop(): Promise<void>;
   hello(name: string): Promise<string>;
+  registerClientTarget(target: RpcTarget, docId?: string): Promise<{ success: boolean }>;
+  unregisterClientTarget(target: RpcTarget, docId?: string): Promise<{ success: boolean }>;
+}
+
+interface ServerCommitPayload {
+  parents: string[];
+  hash: string;
+  contents: string | number[] | Uint8Array;
+}
+
+class ClientEventTarget extends RpcTarget {
+  private readonly listener: (event: unknown) => void;
+
+  constructor(listener: (event: unknown) => void) {
+    super();
+    this.listener = listener;
+  }
+
+  handleServerEvent(event: unknown) {
+    this.listener(event);
+  }
 }
 
 function encodeUtf8(value: string): Uint8Array {
@@ -59,7 +88,7 @@ function toUint8Array(data: unknown): Uint8Array {
   throw new Error("Unsupported commit contents format");
 }
 
-async function createCommit(content: string, parents: string[] = []): Promise<any> {
+async function createCommit(content: string, parents: string[] = []): Promise<CommitSnapshot> {
   const contents = encodeUtf8(content);
   const hashBuffer = await crypto.subtle.digest('SHA-256', contents as BufferSource) as ArrayBuffer;
   const hash = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -80,9 +109,20 @@ function App() {
   const [currentChannel, setCurrentChannel] = useState<Channel | null>(null);
   const [userName, setUserName] = useState('');
   const [messageInput, setMessageInput] = useState('');
-  const [syncEnabled, setSyncEnabled] = useState(false);
   const rpcRef = useRef<RpcStub<BeelayApi> | null>(null);
-  const syncIntervalRef = useRef<number | null>(null);
+  const clientTargetRef = useRef<ClientEventTarget | null>(null);
+  const subscriptionActiveRef = useRef(false);
+  const subscriptionDocIdRef = useRef<string | null>(null);
+  const currentChannelRef = useRef<Channel | null>(null);
+  const processedCommitHashesRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    currentChannelRef.current = currentChannel;
+  }, [currentChannel]);
+
+  useEffect(() => {
+    processedCommitHashesRef.current = new Set(messages.map(message => message.commitHash));
+  }, [messages]);
 
   // Initialize SQLite on component mount
   useEffect(() => {
@@ -114,12 +154,151 @@ function App() {
     setLogs(prev => [...prev, `${new Date().toLocaleTimeString()}: ${message}`]);
   };
 
+  const processCommitEvent = async (docId: string, commitPayload: ServerCommitPayload) => {
+    if (!currentChannelRef.current || currentChannelRef.current.docId !== docId) {
+      return;
+    }
+
+    try {
+      const contentArray = toUint8Array(commitPayload.contents);
+      const decoded = new TextDecoder().decode(contentArray);
+      const messageData = JSON.parse(decoded);
+
+      if (!messageData.user || !messageData.content) {
+        addLog(`⚠️  Received commit with unexpected payload: ${decoded}`);
+        return;
+      }
+
+      const commitHash = commitPayload.hash;
+      if (processedCommitHashesRef.current.has(commitHash)) {
+        return;
+      }
+
+      const message: Message = {
+        id: `msg-${commitHash}`,
+        channelId: currentChannelRef.current.id,
+        user: messageData.user,
+        content: messageData.content,
+        timestamp: messageData.timestamp ?? Date.now(),
+        commitHash
+      };
+
+      const inserted = await sqliteService.saveMessage(message);
+
+      setMessages(prev => {
+        if (prev.find(m => m.commitHash === commitHash)) return prev;
+        return [...prev, message].sort((a, b) => a.timestamp - b.timestamp);
+      });
+
+      if (!inserted && processedCommitHashesRef.current.has(commitHash)) {
+        addLog(`↪️ Skipped duplicate commit ${commitHash.substring(0, 8)}`);
+      } else {
+        addLog(`📥 Received message commit ${commitHash.substring(0, 8)} from RPC`);
+      }
+
+      processedCommitHashesRef.current.add(commitHash);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : JSON.stringify(error);
+      addLog(`❌ Failed to process commit event: ${reason}`);
+    }
+  };
+
+  const isCommitPayload = (value: unknown): value is ServerCommitPayload => {
+    if (!value || typeof value !== 'object') {
+      return false;
+    }
+    const payload = value as Partial<ServerCommitPayload>;
+    return Array.isArray(payload.parents) && typeof payload.hash === 'string' && payload.contents !== undefined;
+  };
+
+  const handleServerEvent = async (rawEvent: unknown) => {
+    if (!rawEvent || typeof rawEvent !== 'object' || !('type' in rawEvent)) {
+      return;
+    }
+
+    const event = rawEvent as { type: string; [key: string]: unknown };
+
+    switch (event.type) {
+      case 'commitAdded':
+        if (typeof event.docId === 'string' && isCommitPayload(event.commit)) {
+          await processCommitEvent(event.docId, event.commit);
+        }
+        break;
+      case 'commitsAdded':
+        if (typeof event.docId === 'string' && Array.isArray(event.commits)) {
+          for (const commit of event.commits) {
+            if (isCommitPayload(commit)) {
+              await processCommitEvent(event.docId, commit);
+            }
+          }
+        }
+        break;
+      case 'docCreated':
+        if (typeof event.id === 'string' && currentChannelRef.current && currentChannelRef.current.docId === event.id) {
+          addLog(`📄 Document confirmed created: ${event.id}`);
+        }
+        break;
+      default:
+        addLog(`ℹ️ Received unhandled server event: ${JSON.stringify(event)}`);
+    }
+  };
+
+  const ensureClientTarget = () => {
+    if (!clientTargetRef.current) {
+      clientTargetRef.current = new ClientEventTarget(handleServerEvent);
+    }
+    return clientTargetRef.current;
+  };
+
+  const subscribeToRpc = async (docId: string) => {
+    if (!rpcRef.current) {
+      addLog('⚠️  Cannot subscribe: RPC connection missing');
+      return;
+    }
+
+    if (subscriptionActiveRef.current && subscriptionDocIdRef.current === docId) {
+      return;
+    }
+
+    try {
+      const target = ensureClientTarget();
+      await rpcRef.current.registerClientTarget(target, docId);
+      subscriptionActiveRef.current = true;
+      subscriptionDocIdRef.current = docId;
+      addLog('🔔 Subscribed to RPC updates');
+    } catch (error) {
+      subscriptionActiveRef.current = false;
+      subscriptionDocIdRef.current = null;
+      addLog(`❌ Failed to subscribe to RPC updates: ${error}`);
+    }
+  };
+
+  const unsubscribeFromRpc = async () => {
+    if (!subscriptionActiveRef.current || !rpcRef.current || !clientTargetRef.current) {
+      subscriptionActiveRef.current = false;
+      subscriptionDocIdRef.current = null;
+      return;
+    }
+
+    try {
+      await rpcRef.current.unregisterClientTarget(clientTargetRef.current, subscriptionDocIdRef.current ?? undefined);
+      addLog('🔕 Unsubscribed from RPC updates');
+    } catch (error) {
+      addLog(`⚠️  Failed to unsubscribe from RPC updates cleanly: ${error}`);
+    } finally {
+      subscriptionActiveRef.current = false;
+      subscriptionDocIdRef.current = null;
+    }
+  };
+
 
 
   const disposeStub = async (stub: RpcStub<BeelayApi>) => {
     try {
-      if (typeof (stub as any)[(Symbol as any).dispose] === "function") {
-        (stub as any)[(Symbol as any).dispose]();
+      const disposable = stub as unknown as DisposableStub;
+      const disposer = disposable[symbolDispose];
+      if (typeof disposer === 'function') {
+        disposer.call(stub);
       }
     } catch {
       console.log("Disposal completed");
@@ -141,25 +320,38 @@ function App() {
   };
 
   const selectChannel = async (channel: Channel) => {
+    if (subscriptionActiveRef.current) {
+      await unsubscribeFromRpc();
+    }
+
     setCurrentChannel(channel);
+    currentChannelRef.current = channel;
     setConnectionStatus('connecting');
+    addLog(`🔌 Opening RPC session for channel ${channel.name}`);
 
     try {
-      // Connect to worker for this channel's document
       const workerUrl = import.meta.env.VITE_WORKER_URL || "ws://localhost:8787";
       const rpc = newWebSocketRpcSession<BeelayApi>(workerUrl);
       rpcRef.current = rpc;
+      addLog(`🌐 Created WebSocket RPC stub targeting ${workerUrl}`);
 
       rpc.onRpcBroken((error) => {
-        if (error.message && error.message.includes("RPC session was shut down by disposing the main stub")) {
-          setConnectionStatus('disconnected');
-        } else {
-          addLog(`❌ Connection lost: ${error.message}`);
-          setConnectionStatus('error');
-        }
+        const reason = error?.message ?? String(error ?? 'unknown');
+        addLog(`❌ RPC connection broke: ${reason}`);
+        setConnectionStatus(reason.includes('disposing the main stub') ? 'disconnected' : 'error');
       });
 
-      // Create document if temp or invalid
+      try {
+        const handshake = await rpc.hello('webui-handshake');
+        addLog(`🤝 Handshake response: ${handshake}`);
+      } catch (handshakeError) {
+        addLog(`❌ RPC handshake failed: ${handshakeError}`);
+        setConnectionStatus('error');
+        throw handshakeError;
+      }
+
+      let activeChannel: Channel = channel;
+
       if (channel.docId.startsWith('temp-') || channel.docId.startsWith('channel-')) {
         const initialCommit = await createCommit(JSON.stringify({ type: 'init', channel: channel.name }), []);
         const result = await rpc.createDoc({
@@ -169,14 +361,13 @@ function App() {
         const newDocId = result.id;
         await sqliteService.updateChannelDocId(channel.id, newDocId);
         setChannels(prev => prev.map(c => c.id === channel.id ? { ...c, docId: newDocId } : c));
-        channel.docId = newDocId;
-        setCurrentChannel(channel);
+        activeChannel = { ...channel, docId: newDocId };
+        setCurrentChannel(activeChannel);
+        currentChannelRef.current = activeChannel;
       } else {
-        // Check if the docId is valid by trying to load
         try {
           await rpc.loadDocument(channel.docId);
-        } catch (error: any) {
-          // Recreate the doc if not found or invalid
+        } catch {
           const initialCommit = await createCommit(JSON.stringify({ type: 'init', channel: channel.name }), []);
           const result = await rpc.createDoc({
             initialCommit,
@@ -185,23 +376,20 @@ function App() {
           const newDocId = result.id;
           await sqliteService.updateChannelDocId(channel.id, newDocId);
           setChannels(prev => prev.map(c => c.id === channel.id ? { ...c, docId: newDocId } : c));
-          channel.docId = newDocId;
-          setCurrentChannel(channel);
+          activeChannel = { ...channel, docId: newDocId };
+          setCurrentChannel(activeChannel);
+          currentChannelRef.current = activeChannel;
         }
       }
 
       setConnectionStatus('connected');
-      addLog(`📡 Connected to channel: ${channel.name}`);
+      addLog(`📡 Connected to channel: ${activeChannel.name}`);
 
-      // Load existing messages for this channel
-      const channelMessages = await sqliteService.getMessagesForChannel(channel.id);
+      const channelMessages = await sqliteService.getMessagesForChannel(activeChannel.id);
       setMessages(channelMessages);
+      processedCommitHashesRef.current = new Set(channelMessages.map(message => message.commitHash));
 
-      // Start sync if enabled
-      if (syncEnabled) {
-        addLog("🔄 Starting real-time sync (polling every 2 seconds)");
-        syncIntervalRef.current = setInterval(() => syncChannel(channel), 2000);
-      }
+      await subscribeToRpc(activeChannel.docId);
 
     } catch (error) {
       addLog(`❌ Error connecting to channel: ${error}`);
@@ -210,38 +398,50 @@ function App() {
   };
 
   const sendMessage = async () => {
-    if (!messageInput.trim() || !currentChannel || !currentChannel.docId || !userName.trim() || !rpcRef.current) return;
+    const content = messageInput.trim();
+    if (!content) {
+      addLog('ℹ️ Cannot send: message is empty');
+      return;
+    }
+
+    if (!userName.trim()) {
+      addLog('ℹ️ Cannot send: set your name first');
+      return;
+    }
+
+    if (!currentChannel) {
+      addLog('ℹ️ Cannot send: no channel selected');
+      return;
+    }
+
+    if (!currentChannel.docId) {
+      addLog('ℹ️ Cannot send: channel is still provisioning');
+      return;
+    }
+
+    if (!rpcRef.current) {
+      addLog('ℹ️ Cannot send: RPC connection not ready');
+      return;
+    }
 
     try {
       const messageContent = {
         user: userName.trim(),
-        content: messageInput.trim(),
+        content,
         timestamp: Date.now()
       };
 
       // Add commit via worker
+      addLog('➡️ Sending message via RPC');
       const result = await rpcRef.current.addWorkerCommit(currentChannel.docId as string, JSON.stringify(messageContent));
+      addLog(`⬅️ RPC response: ${JSON.stringify(result)}`);
 
       if (result.success) {
-        // Log raw CRDT data
         addLog(`🔗 Raw CRDT: hash=${result.commitHash}, content=${JSON.stringify(messageContent)}`);
-
-        // Save message to SQLite
-        const message: Message = {
-          id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          channelId: currentChannel.id,
-          user: userName.trim(),
-          content: messageInput.trim(),
-          timestamp: Date.now(),
-          commitHash: result.commitHash
-        };
-
-        await sqliteService.saveMessage(message);
-        setMessages(prev => [...prev, message]);
         setMessageInput('');
-
-        addLog(`💬 Message sent: ${message.content.substring(0, 50)}...`);
+        addLog('📡 Commit accepted by worker, awaiting broadcast echo');
       } else {
+        addLog('⚠️ addWorkerCommit did not report success');
         addLog(`❌ Failed to add commit`);
       }
 
@@ -250,62 +450,16 @@ function App() {
     }
   };
 
-  const syncChannel = async (channel: Channel) => {
-    if (!rpcRef.current) return;
-
-    try {
-      const commits: CommitSnapshot[] = await rpcRef.current.loadDocument(channel.docId);
-
-      // Log raw CRDT document
-      const rawCommits = commits.map(c => ({
-        parents: c.parents,
-        hash: c.hash,
-        contents: JSON.parse(new TextDecoder().decode(c.contents))
-      }));
-      addLog(`📄 Raw CRDT Document (${commits.length} commits): ${JSON.stringify(rawCommits)}`);
-
-      // Process new commits as messages
-      for (const commit of commits) {
-        const content = toUint8Array(commit.contents);
-        const messageData = JSON.parse(new TextDecoder().decode(content));
-
-        // Check if we already have this message
-        const existingMessage = messages.find(m => m.commitHash === commit.hash);
-        if (!existingMessage && messageData.user && messageData.content) {
-          const message: Message = {
-            id: `msg-${commit.hash}`,
-            channelId: channel.id,
-            user: messageData.user,
-            content: messageData.content,
-            timestamp: messageData.timestamp || Date.now(),
-            commitHash: commit.hash
-          };
-
-          await sqliteService.saveMessage(message);
-          setMessages(prev => {
-            // Avoid duplicates
-            if (prev.find(m => m.commitHash === commit.hash)) return prev;
-            return [...prev, message].sort((a, b) => a.timestamp - b.timestamp);
-          });
-        }
-      }
-
-    } catch (error) {
-      addLog(`❌ Sync error: ${error}`);
-    }
-  };
-
   const leaveChannel = async () => {
-    if (syncIntervalRef.current) {
-      clearInterval(syncIntervalRef.current);
-      syncIntervalRef.current = null;
-    }
+    await unsubscribeFromRpc();
     if (rpcRef.current) {
       await disposeStub(rpcRef.current);
       rpcRef.current = null;
     }
     setCurrentChannel(null);
+    currentChannelRef.current = null;
     setMessages([]);
+    processedCommitHashesRef.current.clear();
     setConnectionStatus('disconnected');
     addLog("👋 Left channel");
   };
@@ -378,14 +532,6 @@ function App() {
                 <div className="channel-header">
                   <h2>#{currentChannel.name}</h2>
                   <div className="channel-actions">
-                    <label className="sync-toggle">
-                      <input
-                        type="checkbox"
-                        checked={syncEnabled}
-                        onChange={(e) => setSyncEnabled(e.target.checked)}
-                      />
-                      Live sync
-                    </label>
                     <button onClick={leaveChannel} className="leave-button">
                       Leave
                     </button>

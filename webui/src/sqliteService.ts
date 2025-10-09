@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import sqlite3InitModule from '@sqlite.org/sqlite-wasm';
 
 export interface CRDTCommit {
@@ -533,11 +534,11 @@ class SQLiteService {
     }
   }
 
-  async saveMessage(message: Message): Promise<void> {
+  async saveMessage(message: Message): Promise<boolean> {
     await this.ensureInitialized();
 
     const sql = `
-      INSERT INTO messages (id, channel_id, user, content, timestamp, commit_hash)
+      INSERT OR IGNORE INTO messages (id, channel_id, user, content, timestamp, commit_hash)
       VALUES (?, ?, ?, ?, ?, ?)
     `;
 
@@ -546,11 +547,36 @@ class SQLiteService {
         sql,
         bind: [message.id, message.channelId, message.user, message.content, message.timestamp, message.commitHash]
       });
+
+      const changesResult = await this.db('exec', {
+        sql: 'SELECT changes()',
+        returnValue: 'resultRows'
+      });
+
+      let rows: any[] = [];
+      if (Array.isArray(changesResult)) {
+        rows = changesResult;
+      } else if (changesResult?.result?.resultRows) {
+        rows = changesResult.result.resultRows;
+      } else if (changesResult?.resultRows) {
+        rows = changesResult.resultRows;
+      }
+
+      const changes = Array.isArray(rows) && rows.length > 0 ? Number(rows[0][0]) : 0;
+      return changes > 0;
     } else if (this.db && this.db.exec) {
       this.db.exec(sql, {
         bind: [message.id, message.channelId, message.user, message.content, message.timestamp, message.commitHash]
       });
+
+      if (typeof this.db.changes === 'function') {
+        return this.db.changes() > 0;
+      }
+
+      return true;
     }
+
+    return false;
   }
 
   async getMessagesForChannel(channelId: string): Promise<Message[]> {

@@ -1,13 +1,16 @@
-import init, { initSync } from "./keyhive/beelay/beelay-wasm/tests/pkg/beelay_wasm.js";
-import wasmModule from "./keyhive/beelay/beelay-wasm/tests/pkg/beelay_wasm_bg.wasm";
+import init, { initSync } from "./test-wasm/beelay_wasm.js";
+import wasmModule from "./test-wasm/beelay_wasm_bg.wasm";
 import {
   Beelay,
   MemorySigner,
   MemoryStorageAdapter,
   type StorageAdapter,
   type StorageKey,
-} from "./keyhive/beelay/beelay-wasm/tests/pkg/beelay_wasm.js";
-import { RpcTarget, newWorkersWebSocketRpcResponse } from "./capnweb/dist/index.js";
+} from "./test-wasm/beelay_wasm.js";
+import { RpcTarget, newWebSocketRpcSession } from "./capnweb/dist/index.js";
+
+// Declare WebSocketPair for TypeScript
+declare const WebSocketPair: any;
 
 // Check WebAssembly support on module load
 checkWebAssemblySupport();
@@ -351,13 +354,33 @@ class DurableObjectStorageAdapter implements StorageAdapter {
 // Beelay handler class
 type BeelayFactory = () => Promise<{ storage: StorageAdapter; signer: MemorySigner }>;
 
+type ClientRegistration = {
+  target: any;
+  originalTarget: any;
+  docId?: string;
+};
+
+function toBase64(data: Uint8Array): string {
+  if (data.length === 0) return "";
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < data.length; i += chunkSize) {
+    const chunk = data.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
 class BeelayHandler extends RpcTarget {
   private beelay?: Beelay;
   private beelayPromise?: Promise<Beelay>;
+  private readonly clientTargets = new Set<ClientRegistration>();
 
   constructor(private readonly factory?: BeelayFactory) {
     super();
   }
+
+  sendToAll?: (message: any) => void;
 
   private async getBeelay() {
     if (this.beelay) {
@@ -387,6 +410,134 @@ class BeelayHandler extends RpcTarget {
     return this.beelayPromise;
   }
 
+  private serializeCommit(commit: any) {
+    let contents: Uint8Array;
+    const value = commit.contents;
+    if (value instanceof Uint8Array) {
+      contents = value;
+    } else if (value instanceof ArrayBuffer) {
+      contents = new Uint8Array(value);
+    } else if (ArrayBuffer.isView(value)) {
+      contents = new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+    } else if (typeof value === "string") {
+      const decoded = Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
+      contents = decoded;
+    } else if (Array.isArray(value)) {
+      contents = new Uint8Array(value);
+    } else {
+      throw new Error("Unsupported commit contents type for serialization");
+    }
+
+    return {
+      parents: commit.parents,
+      hash: commit.hash,
+      contents: toBase64(contents)
+    };
+  }
+
+  private async broadcast(event: any, docId?: string) {
+    console.log('📣 broadcast', {
+      type: event?.type,
+      docId,
+      totalTargets: this.clientTargets.size,
+      filteredTargets: [...this.clientTargets].filter((registration) => !docId || !registration.docId || registration.docId === docId).length,
+    });
+
+    if (this.clientTargets.size === 0 && !this.sendToAll) {
+      console.log('ℹ️ broadcast: no registered targets');
+    }
+
+    if (this.sendToAll) {
+      this.sendToAll(event);
+    }
+
+    for (const registration of [...this.clientTargets]) {
+      if (docId && registration.docId && registration.docId !== docId) {
+        continue;
+      }
+
+      try {
+        const result = registration.target.handleServerEvent(event);
+        if (result && typeof result.then === "function") {
+          await result;
+        }
+      } catch (error) {
+        console.error("Error delivering event to client target:", error);
+        if (typeof registration.target?.[Symbol.dispose] === "function") {
+          try {
+            registration.target[Symbol.dispose]();
+          } catch (disposeError) {
+            console.warn('broadcast dispose failed', disposeError);
+          }
+        }
+        this.clientTargets.delete(registration);
+        console.log('🧹 removed client target after delivery failure', {
+          remaining: this.clientTargets.size,
+          docId: registration.docId,
+        });
+      }
+    }
+  }
+
+  async registerClientTarget(target: any, docId?: string) {
+    let retainedTarget = target;
+    try {
+      if (typeof target?.dup === "function") {
+        retainedTarget = target.dup();
+      } else {
+        const rawSymbol = Object.getOwnPropertySymbols(target).find((symbol) => symbol.description === "realStub");
+        if (rawSymbol) {
+          const rawStub = (target as any)[rawSymbol];
+          if (typeof rawStub?.dup === "function") {
+            retainedTarget = rawStub.dup();
+          }
+        }
+      }
+    } catch (error) {
+      console.warn("registerClientTarget: failed to duplicate stub", error);
+    }
+
+    const registration: ClientRegistration = { target: retainedTarget, originalTarget: target, docId };
+    this.clientTargets.add(registration);
+    console.log('✅ registered client target', {
+      total: this.clientTargets.size,
+      docId,
+    });
+
+    if (retainedTarget && typeof retainedTarget.onRpcBroken === "function") {
+      retainedTarget.onRpcBroken(() => {
+        if (typeof registration.target?.[Symbol.dispose] === "function") {
+          try {
+            registration.target[Symbol.dispose]();
+          } catch (disposeError) {
+            console.warn('onRpcBroken dispose failed', disposeError);
+          }
+        }
+        this.clientTargets.delete(registration);
+      });
+    }
+
+    return { success: true };
+  }
+
+  async unregisterClientTarget(target: any, docId?: string) {
+    for (const registration of this.clientTargets) {
+      if (registration.originalTarget === target && (!docId || registration.docId === docId)) {
+        if (typeof registration.target?.[Symbol.dispose] === "function") {
+          try {
+            registration.target[Symbol.dispose]();
+          } catch (disposeError) {
+            console.warn('unregisterClientTarget dispose failed', disposeError);
+          }
+        }
+        this.clientTargets.delete(registration);
+        console.log('🧹 unregistered client target', { total: this.clientTargets.size, docId });
+        break;
+      }
+    }
+    return { success: true };
+  }
+
   async createDoc(options: any) {
     // Convert contents to Uint8Array and compute hash
     const contents = new Uint8Array(options.initialCommit.contents);
@@ -396,6 +547,8 @@ class BeelayHandler extends RpcTarget {
     options.initialCommit.hash = hash;
     const beelay = await this.getBeelay();
     const doc = await beelay.createDoc(options);
+    // Send direct message to all clients
+  await this.broadcast({ type: 'docCreated', id: String(doc) }, String(doc));
     // Wrap: return plain JSON
     return { id: String(doc) };
   }
@@ -423,6 +576,14 @@ class BeelayHandler extends RpcTarget {
   async addCommits(options: any) {
     const beelay = await this.getBeelay();
     await beelay.addCommits(options);
+    await this.broadcast(
+      {
+        type: 'commitsAdded',
+        docId: options.docId,
+        commits: options.commits.map((commit: any) => this.serializeCommit(commit))
+      },
+      options.docId
+    );
     return { success: true };
   }
 
@@ -453,6 +614,14 @@ class BeelayHandler extends RpcTarget {
     };
 
     await beelay.addCommits({ docId, commits: [newCommit] });
+    await this.broadcast(
+      {
+        type: 'commitAdded',
+        docId,
+        commit: this.serializeCommit(newCommit)
+      },
+      docId
+    );
     return { success: true, commitHash: hash };
   }
 
@@ -509,11 +678,24 @@ export class BeelayDO {
         signer: new MemorySigner(),
       };
     });
+
+    // Legacy broadcast path is unused when clients register RPC targets
+    this.handler.sendToAll = undefined;
   }
 
   async fetch(request: Request) {
     if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
-      return newWorkersWebSocketRpcResponse(request, this.handler);
+      const webSocketPair = new WebSocketPair();
+      const client = webSocketPair[0];
+      const server = webSocketPair[1];
+
+      server.accept();
+      newWebSocketRpcSession(server, this.handler);
+
+      return new Response(null, {
+        status: 101,
+        webSocket: client,
+      } as any);
     }
 
     return new Response("WebSocket required", { status: 400 });

@@ -29,6 +29,8 @@ interface BeelayApi extends RpcTarget {
   waitUntilSynced(peerId: string): { synced: boolean };
   stop(): void;
   hello(name: string): string;
+  registerClientTarget(target: RpcTarget, docId?: string): { success: boolean };
+  unregisterClientTarget(target: RpcTarget, docId?: string): { success: boolean };
 }
 
 function encodeUtf8(value: string): Uint8Array {
