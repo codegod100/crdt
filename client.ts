@@ -150,7 +150,7 @@ async function demonstrateCRDT() {
 
   } catch (error) {
     // Check if this is the expected disposal error
-    if (error.message && error.message.includes("RPC session was shut down by disposing the main stub")) {
+    if (error instanceof Error && error.message.includes("RPC session was shut down by disposing the main stub")) {
       console.log("✅ CRDT demonstration completed successfully (RPC connection closed as expected)");
     } else {
       console.error("❌ Error during CRDT demonstration:", error);

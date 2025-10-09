@@ -1,13 +1,29 @@
-import init, { initSync } from "./test-wasm/beelay_wasm.js";
-import wasmModule from "./test-wasm/beelay_wasm_bg.wasm";
+import init, { initSync } from "./test-wasm/subduction_wasm.js";
+import wasmModule from "./test-wasm/subduction_wasm_bg.wasm";
 import {
   Beelay,
   MemorySigner,
   MemoryStorageAdapter,
-  type StorageAdapter,
-  type StorageKey,
-} from "./test-wasm/beelay_wasm.js";
+} from "./test-wasm/subduction_wasm.js";
 import { RpcTarget, newWebSocketRpcSession } from "./capnweb/dist/index.js";
+
+type StorageKey = string[];
+
+interface StorageAdapter {
+  load(key: StorageKey): Promise<Uint8Array | undefined>;
+  loadRange(prefix: StorageKey): Promise<Map<StorageKey, Uint8Array>>;
+  save(key: StorageKey, data: Uint8Array): Promise<void>;
+  remove(key: StorageKey): Promise<void>;
+  listOneLevel(prefix: StorageKey): Promise<StorageKey[]>;
+}
+
+type CommitMessage = {
+  type: string;
+  parents?: string[];
+  hash?: string;
+  contents?: Uint8Array;
+  [key: string]: unknown;
+};
 
 // Declare WebSocketPair for TypeScript
 declare const WebSocketPair: any;
@@ -165,6 +181,16 @@ async function listEntries(storage: any, prefix: string | undefined) {
     return await storage.list();
   }
   return await storage.list({ prefix });
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
 }
 
 class DurableObjectStorageAdapter implements StorageAdapter {
@@ -555,17 +581,22 @@ class BeelayHandler extends RpcTarget {
 
   async loadDocument(docId: string) {
     const beelay = await this.getBeelay();
-    const commits = await beelay.loadDocument(docId);
+    const commits = (await beelay.loadDocument(docId)) as CommitMessage[] | undefined;
 
     // Convert commits to plain JSON with base64 for binary contents
     if (!commits) return [];
 
-    return commits.map(commit => {
-      if (commit.type === 'commit') {
+    return commits.map((commit) => {
+      if (
+        commit.type === "commit" &&
+        Array.isArray(commit.parents) &&
+        typeof commit.hash === "string" &&
+        commit.contents instanceof Uint8Array
+      ) {
         return {
           parents: commit.parents,
           hash: commit.hash,
-          contents: btoa(String.fromCharCode(...commit.contents))
+          contents: encodeBase64(commit.contents),
         };
       }
       // Handle bundle types if needed

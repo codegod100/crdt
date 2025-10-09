@@ -2,114 +2,62 @@ import {
   Beelay,
   MemorySigner,
   MemoryStorageAdapter,
-  type Stream,
-  type Commit,
-  type StorageAdapter,
-  type StorageKey,
-  type CommitOrBundle,
-  type DocumentId,
-} from "./keyhive/beelay/beelay-wasm/tests/pkg/beelay_wasm.js";
-import { createHash } from "crypto";
+} from "./test-wasm/subduction_wasm.js";
 
-// Example demonstrating Beelay data transport in TypeScript
-async function beelayExample() {
-  console.log("=== Beelay TypeScript Example ===");
+type CommitPayload = {
+  hash: string;
+  parents: string[];
+  contents: Uint8Array;
+};
 
-  // Create two Beelay instances
-  const storage1 = new MemoryStorageAdapter();
-  const signer1 = new MemorySigner();
-  const alice = await Beelay.load({ storage: storage1, signer: signer1 });
+async function example() {
+  console.log("=== Clean Implementation with WASM ===");
 
-  const storage2 = new MemoryStorageAdapter();
-  const signer2 = new MemorySigner();
-  const bob = await Beelay.load({ storage: storage2, signer: signer2 });
+  const storage = new MemoryStorageAdapter();
+  const signer = new MemorySigner();
+  const runtime = await Beelay.load({ storage, signer });
 
-  console.log("Alice peer ID:", alice.peerId);
-  console.log("Bob peer ID:", bob.peerId);
+  const initialCommit = await makeCommit("Hello, CRDT world!", []);
+  const docId = await runtime.createDoc({ initialCommit, otherParents: [] });
+  console.log("Created document:", docId);
 
-  // Get Bob's contact card
-  const bobContactCard = await bob.createContactCard();
+  const secondCommit = await makeCommit("Another update", [initialCommit.hash]);
+  await runtime.addCommits({ docId, commits: [secondCommit] });
+  console.log("Added second commit", secondCommit.hash);
 
-  // Alice creates a document shared with Bob
-  const doc = await alice.createDoc({
-    initialCommit: commit("initial content"),
-    otherParents: [{ type: "individual", contactCard: bobContactCard }],
-  });
-  console.log("Document created:", doc);
+  const commits = (await runtime.loadDocument(docId)) as Array<{
+    type: string;
+    parents?: string[];
+    hash?: string;
+    contents?: Uint8Array;
+  }>;
 
-  // Alice adds a commit with data
-  const nextCommit = commit("synced data from Alice", [commit("initial content").hash]);
-  await alice.addCommits({
-    docId: doc,
-    commits: [nextCommit],
-  });
-  console.log("Alice added commit with data");
-
-  // Connect Alice and Bob
-  connect(alice, bob);
-
-  // Wait for sync
-  await alice.waitUntilSynced(bob.peerId);
-  console.log("Peers synced");
-
-  // Bob loads the document
-  const docOnBob = await bob.loadDocument(doc);
-  console.log("Bob received", docOnBob.length, "commits");
-  for (const item of docOnBob) {
-    if (item.type === "commit") {
-      console.log("Commit content:", new TextDecoder().decode(item.contents));
+  console.log(`Document has ${commits.length} entries:`);
+  for (const item of commits) {
+    if (item.type === "commit" && item.contents && item.hash) {
+      console.log(
+        `- ${item.hash.slice(0, 8)}: ${new TextDecoder().decode(item.contents)}`
+      );
     }
   }
 
-  // Clean up
-  await alice.stop();
-  await bob.stop();
+  await runtime.stop();
 }
 
-function connect(left: Beelay, right: Beelay) {
-  const { port1: leftToRight, port2: rightToLeft } = new MessageChannel();
-  leftToRight.start();
-  rightToLeft.start();
+async function makeCommit(message: string, parents: string[]): Promise<CommitPayload> {
+  const contents = new TextEncoder().encode(message);
+  const digest = await crypto.subtle.digest("SHA-256", contents);
+  const hash = Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 
-  function connectStream(stream: Stream, port: MessagePort) {
-    stream.on("message", (message) => {
-      port.postMessage(message);
-    });
-    port.onmessage = (event) => {
-      stream.recv(new Uint8Array(event.data));
-    };
-    stream.on("disconnect", () => {
-      port.close();
-    });
-  }
-
-  const leftStream = left.createStream({
-    direction: "connecting",
-    remoteAudience: {
-      type: "peerId",
-      peerId: right.peerId,
-    },
-  });
-  connectStream(leftStream, leftToRight);
-
-  const rightStream = right.createStream({
-    direction: "accepting",
-  });
-  connectStream(rightStream, rightToLeft);
-}
-
-function commit(contents: string, parents: string[] = []): Commit {
-  const hash = createHash("sha256")
-    .update(contents)
-    .update(parents.join(""))
-    .digest("hex");
-  const contentsAsUint8Array = new Uint8Array(Buffer.from(contents, "utf-8"));
   return {
+    contents,
     parents,
     hash,
-    contents: contentsAsUint8Array,
   };
 }
 
-// Run the example
-beelayExample().catch(console.error);
+example().catch((error) => {
+  console.error("Example failed", error);
+});
