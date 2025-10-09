@@ -176,21 +176,17 @@ function App() {
         try {
           await rpc.loadDocument(channel.docId);
         } catch (error: any) {
-          if (error.message && error.message.includes("invalid document Id")) {
-            // Recreate the doc with valid id
-            const initialCommit = await createCommit(JSON.stringify({ type: 'init', channel: channel.name }), []);
-            const result = await rpc.createDoc({
-              initialCommit,
-              otherParents: []
-            });
-            const newDocId = result.id;
-            await sqliteService.updateChannelDocId(channel.id, newDocId);
-            setChannels(prev => prev.map(c => c.id === channel.id ? { ...c, docId: newDocId } : c));
-            channel.docId = newDocId;
-            setCurrentChannel(channel);
-          } else {
-            throw error;
-          }
+          // Recreate the doc if not found or invalid
+          const initialCommit = await createCommit(JSON.stringify({ type: 'init', channel: channel.name }), []);
+          const result = await rpc.createDoc({
+            initialCommit,
+            otherParents: []
+          });
+          const newDocId = result.id;
+          await sqliteService.updateChannelDocId(channel.id, newDocId);
+          setChannels(prev => prev.map(c => c.id === channel.id ? { ...c, docId: newDocId } : c));
+          channel.docId = newDocId;
+          setCurrentChannel(channel);
         }
       }
 
@@ -227,6 +223,9 @@ function App() {
       const result = await rpcRef.current.addWorkerCommit(currentChannel.docId as string, JSON.stringify(messageContent));
 
       if (result.success) {
+        // Log raw CRDT data
+        addLog(`🔗 Raw CRDT: hash=${result.commitHash}, content=${JSON.stringify(messageContent)}`);
+
         // Save message to SQLite
         const message: Message = {
           id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -256,6 +255,14 @@ function App() {
 
     try {
       const commits: CommitSnapshot[] = await rpcRef.current.loadDocument(channel.docId);
+
+      // Log raw CRDT document
+      const rawCommits = commits.map(c => ({
+        parents: c.parents,
+        hash: c.hash,
+        contents: JSON.parse(new TextDecoder().decode(c.contents))
+      }));
+      addLog(`📄 Raw CRDT Document (${commits.length} commits): ${JSON.stringify(rawCommits)}`);
 
       // Process new commits as messages
       for (const commit of commits) {

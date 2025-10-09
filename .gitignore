@@ -108,3 +108,6 @@ logs
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+
+# Wrangler local dev state
+.wrangler/

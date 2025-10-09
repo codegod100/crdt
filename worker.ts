@@ -524,7 +524,9 @@ export class BeelayDO {
 export default {
   async fetch(request: Request, env: any) {
     if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
-      return newWorkersWebSocketRpcResponse(request, new BeelayHandler());
+      const id = env.BEELAY_DO.idFromName("global");
+      const stub = env.BEELAY_DO.get(id);
+      return stub.fetch(request);
     }
 
     return new Response("WebSocket required", { status: 400 });
