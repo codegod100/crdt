@@ -1,0 +1,9 @@
+/node_modules
+/yarn.lock
+dist
+docs/
+.vim
+deno_dist/
+src/wasm_bindgen_output/
+src/wasm_types.d.ts
+*.tgz

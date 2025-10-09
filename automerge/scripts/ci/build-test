@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -eoux pipefail
+
+pushd rust
+RUST_LOG=error cargo test -p automerge
+RUST_LOG=error cargo test -p automerge-test
+RUST_LOG=error cargo test -p automerge-c
+RUST_LOG=error cargo test -p automerge-cli
+RUST_LOG=error cargo test -p automerge-wasm
+popd

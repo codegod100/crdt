@@ -1,0 +1,18 @@
+name: Advisories
+on:
+  schedule:
+    - cron: '0 18 * * *'
+jobs:
+  cargo-deny:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        checks:
+          - advisories
+          - bans licenses sources
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: './rust/Cargo.toml'
+          command: check ${{ matrix.checks }}

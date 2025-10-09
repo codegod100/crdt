@@ -1,0 +1,167 @@
+name: CI
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: 1.86
+          default: true
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: ./scripts/ci/fmt
+        shell: bash
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: 1.86
+          default: true
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: ./scripts/ci/lint
+        shell: bash
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: 1.86
+          default: true
+      - uses: Swatinem/rust-cache@v2
+      - name: Build rust docs
+        run: ./scripts/ci/rust-docs
+        shell: bash
+      - name: Install doxygen
+        run: sudo apt-get install -y doxygen
+        shell: bash
+
+  cargo-deny:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        checks:
+          - advisories
+          - bans licenses sources
+    continue-on-error: ${{ matrix.checks == 'advisories' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: "./rust/Cargo.toml"
+          command: check ${{ matrix.checks }}
+
+  build_wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: jetli/wasm-bindgen-action@v0.2.0
+        with:
+          # Optional version of wasm-bindgen to install(eg. '0.2.83', 'latest')
+          version: "0.2.104"
+      - name: Install wasm32 target
+        working-directory: rust
+        run: rustup target add wasm32-unknown-unknown
+      - name: run tests
+        run: ./scripts/ci/wasm_tests
+
+  js_tests:
+    runs-on: ubuntu-latest
+    needs:
+      - build_wasm
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - uses: jetli/wasm-bindgen-action@v0.2.0
+        with:
+          # Optional version of wasm-bindgen to install(eg. '0.2.83', 'latest')
+          version: "0.2.104"
+      - name: Install wasm32 target
+        working-directory: rust
+        run: rustup target add wasm32-unknown-unknown
+      - name: run tests
+        run: ./scripts/ci/js_tests
+
+  # This test is necessary because we want to make sure that the webcrypto polyfill
+  # for node 18 works correctly. See the notes in javascript/HACKING.md#getrandom-support
+  node_18_packaging_test:
+    runs-on: ubuntu-latest
+    needs:
+      - build_wasm
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "18"
+      - uses: jetli/wasm-bindgen-action@v0.2.0
+        with:
+          # Optional version of wasm-bindgen to install(eg. '0.2.83', 'latest')
+          version: "0.2.104"
+      - name: Install wasm32 target
+        working-directory: rust
+        run: rustup target add wasm32-unknown-unknown
+      - name: run tests
+        run: ./scripts/ci/node_18_packaging_test
+
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        toolchain:
+          - 1.86
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.toolchain }}
+          default: true
+      - uses: Swatinem/rust-cache@v2
+      - run: ./scripts/ci/build-test
+        shell: bash
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: 1.86
+          default: true
+      - uses: Swatinem/rust-cache@v2
+      - run: ./scripts/ci/build-test
+        shell: bash
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: 1.86
+          default: true
+      - uses: Swatinem/rust-cache@v2
+      - run: ./scripts/ci/build-test
+        shell: bash

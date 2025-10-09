@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -eoux pipefail
+
+# see https://stackoverflow.com/questions/4774054/reliable-way-for-a-bash-script-to-get-the-full-path-to-itself
+THIS_SCRIPT="$( cd -- "$(dirname "$0")" >/dev/null 2>&1 ; pwd -P )"
+# \note CMake's default build types are "Debug", "MinSizeRel", "Release" and
+# "RelWithDebInfo" but custom ones can also be defined so we pass it verbatim.
+BUILD_TYPE=$1;
+LIB_TYPE=$2;
+if [ "$(echo "${LIB_TYPE}" | tr '[:upper:]' '[:lower:]')" == "shared" ]; then
+    SHARED_TOGGLE="ON"
+else
+    SHARED_TOGGLE="OFF"
+fi
+C_PROJECT=$THIS_SCRIPT/../../rust/automerge-c;
+mkdir -p $C_PROJECT/build;
+cd $C_PROJECT/build;
+cmake --log-level=ERROR -B . -S .. -DCMAKE_BUILD_TYPE=$BUILD_TYPE -DBUILD_SHARED_LIBS=$SHARED_TOGGLE;
+cmake --build . --target automerge_test;

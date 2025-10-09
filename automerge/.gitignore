@@ -1,0 +1,7 @@
+/.direnv
+perf.*
+/Cargo.lock
+build/
+.vim/*
+/target
+.DS_Store

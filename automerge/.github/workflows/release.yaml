@@ -1,0 +1,70 @@
+name: Release
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish-js:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./javascript
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20.x"
+          registry-url: "https://registry.npmjs.org"
+      - uses: jetli/wasm-bindgen-action@v0.2.0
+        with:
+          # Optional version of wasm-bindgen to install(eg. '0.2.83', 'latest')
+          version: "0.2.104"
+      - name: Install wasm32 target
+        working-directory: rust
+        run: rustup target add wasm32-unknown-unknown
+      - name: yarn install
+        run: yarn install
+      - name: build js
+        run: node ./scripts/build.mjs
+      - name: "npm publish pre-release"
+        if: "github.event.release.prerelease"
+        run: npm publish --tag next --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: "npm publish release"
+        if: "!github.event.release.prerelease"
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-js-docs:
+    runs-on: ubuntu-latest
+    if: "!github.event.release.prerelease"
+    defaults:
+      run:
+        working-directory: ./javascript
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "20.x"
+          registry-url: "https://registry.npmjs.org"
+      - name: Install wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli wasm-opt
+      - name: Install wasm32 target
+        working-directory: rust
+        run: rustup target add wasm32-unknown-unknown
+      - name: yarn install
+        run: yarn install
+      - name: build js
+        run: node ./scripts/build.mjs
+      - name: build js docs
+        id: build_release
+        run: |
+          npx typedoc --out api-docs
+      - name: Deploy 🚀
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          branch: gh-pages
+          folder: ./javascript/api-docs
+          target-folder: api-docs/js

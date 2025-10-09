@@ -1,0 +1,14 @@
+/workspaces/crdt/subduction-wasm/target/wasm32-unknown-unknown/release/deps/thiserror-d2048cc01793516b.d: /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/lib.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/aserror.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/display.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/var.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/private.rs /workspaces/crdt/subduction-wasm/target/wasm32-unknown-unknown/release/build/thiserror-c42169bd4a2bb629/out/private.rs
+
+/workspaces/crdt/subduction-wasm/target/wasm32-unknown-unknown/release/deps/libthiserror-d2048cc01793516b.rlib: /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/lib.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/aserror.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/display.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/var.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/private.rs /workspaces/crdt/subduction-wasm/target/wasm32-unknown-unknown/release/build/thiserror-c42169bd4a2bb629/out/private.rs
+
+/workspaces/crdt/subduction-wasm/target/wasm32-unknown-unknown/release/deps/libthiserror-d2048cc01793516b.rmeta: /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/lib.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/aserror.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/display.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/var.rs /usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/private.rs /workspaces/crdt/subduction-wasm/target/wasm32-unknown-unknown/release/build/thiserror-c42169bd4a2bb629/out/private.rs
+
+/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/lib.rs:
+/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/aserror.rs:
+/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/display.rs:
+/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/var.rs:
+/usr/local/cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.17/src/private.rs:
+/workspaces/crdt/subduction-wasm/target/wasm32-unknown-unknown/release/build/thiserror-c42169bd4a2bb629/out/private.rs:
+
+# env-dep:OUT_DIR=/workspaces/crdt/subduction-wasm/target/wasm32-unknown-unknown/release/build/thiserror-c42169bd4a2bb629/out

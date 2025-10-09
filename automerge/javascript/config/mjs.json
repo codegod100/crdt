@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.json",
+  "exclude": [
+    "../dist/**/*",
+    "../node_modules",
+    "../test/**/*",
+    "../src/**/*.deno.ts"
+  ],
+  "compilerOptions": {
+    "target": "es6",
+    "outDir": "../dist/mjs"
+  }
+}
