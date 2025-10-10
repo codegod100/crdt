@@ -1,0 +1,8 @@
+name = "webui"
+main = "./.svelte-kit/cloudflare/_worker.js"
+compatibility_date = "2025-10-10"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[assets]
+directory = ".svelte-kit/cloudflare/assets"

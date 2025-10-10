@@ -1,27 +1,17 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import { sveltekit } from '@sveltejs/kit/vite';
+import { defineConfig } from 'vite';
 
-// https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
-  server: {
-    headers: {
-      // Required for OPFS (Origin Private File System) support in SQLite WASM
-      'Cross-Origin-Opener-Policy': 'same-origin',
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-    },
-    proxy: {
-      // Proxy WebSocket connections to the Cloudflare Worker
-      '/ws': {
-        target: 'ws://localhost:8787',
-        changeOrigin: true,
-        ws: true,
-      }
-    },
-    // Ensure headers are set for all responses
-    middlewareMode: false,
+  plugins: [sveltekit()],
+  build: {
+    target: 'esnext'
   },
   optimizeDeps: {
-    exclude: ['@sqlite.org/sqlite-wasm'],
+    esbuildOptions: {
+      target: 'esnext'
+    }
   },
-})
+  ssr: {
+    target: 'node'
+  }
+});
