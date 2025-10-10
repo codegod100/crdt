@@ -457,9 +457,26 @@ function App() {
           return;
         }
 
+        const oldContent = latestDocumentContentRef.current;
+        const newContent = messageData.content;
+        let cursorStart = 0;
+        let cursorEnd = 0;
+
+        if (textareaRef.current) {
+          cursorStart = textareaRef.current.selectionStart;
+          cursorEnd = textareaRef.current.selectionEnd;
+        }
+
+        const lengthDiff = newContent.length - oldContent.length;
+
+        cursorRef.current = {
+          start: Math.max(0, cursorStart + lengthDiff),
+          end: Math.max(0, cursorEnd + lengthDiff)
+        };
+
         applyingRemoteDocumentRef.current = true;
-        setDocumentContent(messageData.content);
-        latestDocumentContentRef.current = messageData.content;
+        setDocumentContent(newContent);
+        latestDocumentContentRef.current = newContent;
         if (documentDebounceRef.current) {
           clearTimeout(documentDebounceRef.current);
           documentDebounceRef.current = null;
@@ -906,8 +923,11 @@ function App() {
 
   useLayoutEffect(() => {
     if (cursorRef.current && textareaRef.current) {
-      textareaRef.current.selectionStart = cursorRef.current.start;
-      textareaRef.current.selectionEnd = cursorRef.current.end;
+      const newContentLength = textareaRef.current.value.length;
+      const start = Math.min(cursorRef.current.start, newContentLength);
+      const end = Math.min(cursorRef.current.end, newContentLength);
+      textareaRef.current.selectionStart = start;
+      textareaRef.current.selectionEnd = end;
       cursorRef.current = null;
     }
   });
