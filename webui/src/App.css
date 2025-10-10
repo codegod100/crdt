@@ -311,6 +311,28 @@ main {
   font-size: 0.85rem;
 }
 
+.channel-address {
+  display: flex;
+  margin-top: 0.5rem;
+}
+
+.channel-address input {
+  flex: 1;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 4px 0 0 4px;
+  background: #f0f0f0;
+}
+
+.channel-address button {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid #ccc;
+  border-left: none;
+  border-radius: 0 4px 4px 0;
+  cursor: pointer;
+}
+
 .document-editor {
   display: flex;
   flex-direction: column;

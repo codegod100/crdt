@@ -231,6 +231,106 @@ function toOverlayLines(attribution: CharAttribution[], fallbackAuthor: string):
   return lines;
 }
 
+interface PersistResult {
+  messageCount: number;
+  documentCount: number;
+  latestActivity: number;
+  latestDocumentTimestamp: number;
+  latestDocumentHash: string | null;
+  latestDocumentContent: string;
+}
+
+async function persistCommitsForChannel(channel: Channel, commits: CommitSnapshot[]): Promise<PersistResult> {
+  let messageCount = 0;
+  let documentCount = 0;
+  let latestActivity = channel.lastModified;
+  let latestDocumentTimestamp = 0;
+  let latestDocumentHash: string | null = null;
+  let latestDocumentContent = '';
+
+  const decoder = new TextDecoder();
+
+  for (const commit of commits) {
+    const payloadBytes = toUint8Array(commit.contents);
+    const commitText = decoder.decode(payloadBytes);
+
+    let payload: { type?: string; user?: string; content?: unknown; timestamp?: number } | null = null;
+    try {
+      payload = JSON.parse(commitText) as { type?: string; user?: string; content?: unknown; timestamp?: number };
+    } catch {
+      continue;
+    }
+
+    const type = typeof payload?.type === 'string' ? payload!.type : 'message';
+    const timestamp = typeof payload?.timestamp === 'number' ? payload!.timestamp : Date.now();
+    const user = payload?.user?.trim() || 'anonymous';
+
+    latestActivity = Math.max(latestActivity, timestamp);
+
+    if (type === 'document') {
+      if (typeof payload?.content !== 'string') {
+        continue;
+      }
+
+      await sqliteService.saveChannelDocumentCommit({
+        channelId: channel.id,
+        commitHash: commit.hash,
+        user,
+        content: payload.content,
+        timestamp
+      });
+
+      latestDocumentTimestamp = Math.max(latestDocumentTimestamp, timestamp);
+      latestDocumentHash = commit.hash;
+      latestDocumentContent = payload.content;
+      documentCount += 1;
+      continue;
+    }
+
+    if (type === 'message') {
+      if (typeof payload?.content !== 'string') {
+        continue;
+      }
+
+      const message: Message = {
+        id: `msg-${commit.hash}`,
+        channelId: channel.id,
+        user,
+        content: payload.content,
+        timestamp,
+        commitHash: commit.hash
+      };
+
+      const inserted = await sqliteService.saveMessage(message);
+      if (inserted) {
+        messageCount += 1;
+      }
+    }
+  }
+
+  if (documentCount > 0) {
+    await sqliteService.saveChannelDocument({
+      channelId: channel.id,
+      content: latestDocumentContent,
+      updatedAt: latestDocumentTimestamp || Date.now(),
+      latestCommitHash: latestDocumentHash
+    });
+  }
+
+  if (latestActivity !== channel.lastModified) {
+    await sqliteService.updateChannelLastModified(channel.id, latestActivity);
+  }
+
+  return {
+    messageCount,
+    documentCount,
+    latestActivity,
+    latestDocumentTimestamp,
+    latestDocumentHash,
+    latestDocumentContent
+  };
+}
+
 class ClientEventTarget extends RpcTarget {
   private readonly listener: (event: unknown) => void;
 
@@ -290,6 +390,7 @@ function App() {
   const [currentChannel, setCurrentChannel] = useState<Channel | null>(null);
   const [userName, setUserName] = useState('');
   const [messageInput, setMessageInput] = useState('');
+  const [joinAddressInput, setJoinAddressInput] = useState('');
   const [activeView, setActiveView] = useState<'chat' | 'document'>('document');
   const [documentContent, setDocumentContent] = useState('');
   const [lastDocumentSync, setLastDocumentSync] = useState<number | null>(null);
@@ -302,6 +403,7 @@ function App() {
   const clientTargetRef = useRef<ClientEventTarget | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const cursorRef = useRef<{ start: number; end: number } | null>(null);
+  const restoreAttributionRef = useRef<CharAttribution[] | null>(null);
   const subscriptionActiveRef = useRef(false);
   const subscriptionDocIdRef = useRef<string | null>(null);
   const currentChannelRef = useRef<Channel | null>(null);
@@ -365,6 +467,13 @@ function App() {
 
   useEffect(() => {
     const fallbackUser = userName.trim() || 'anonymous';
+
+    if (restoreAttributionRef.current) {
+      const restored = ensureAttributionMatchesContent(restoreAttributionRef.current, documentContent, fallbackUser);
+      restoreAttributionRef.current = null;
+      setCharAttribution(restored);
+      return;
+    }
 
     if (!documentHistory.length) {
       if (documentContent.length === 0) {
@@ -667,6 +776,66 @@ function App() {
     }
   };
 
+  const joinChannelByAddress = async (address: string) => {
+    if (!address.trim()) {
+      addLog('ℹ️ Channel address cannot be empty');
+      return;
+    }
+
+    const existingChannel = channels.find(c => c.docId === address);
+    if (existingChannel) {
+      addLog(`✅ Channel for address ${address.substring(0, 8)}... already exists. Selecting it.`);
+      await selectChannel(existingChannel);
+      return;
+    }
+
+    addLog(`🔎 Trying to join new channel by address: ${address.substring(0, 8)}...`);
+    let tempRpc: RpcStub<BeelayApi> | null = null;
+    try {
+      const workerUrl = import.meta.env.VITE_WORKER_URL || "ws://localhost:8787";
+      tempRpc = newWebSocketRpcSession<BeelayApi>(workerUrl);
+      await tempRpc.hello('webui-join-lookup');
+
+      const commits = await tempRpc.loadDocument(address);
+      if (!commits || commits.length === 0) {
+        throw new Error('No commits found for this document address.');
+      }
+
+      const initialCommitContent = toUint8Array(commits[0].contents);
+      const decoded = new TextDecoder().decode(initialCommitContent);
+      let messageData: { channel?: string } = {};
+      try {
+        messageData = JSON.parse(decoded) as { channel?: string };
+      } catch {
+        // ignore parse issues for init commit
+      }
+
+      const channelName = messageData.channel || `Channel ${address.substring(0, 6)}`;
+
+      addLog(`👍 Found channel "${channelName}" from address. Creating local entry.`);
+
+      const newChannel = await sqliteService.createChannel(channelName, address);
+      const persistResult = await persistCommitsForChannel(newChannel, commits);
+
+      const hydratedChannel: Channel = {
+        ...newChannel,
+        lastModified: persistResult.latestActivity
+      };
+
+      addLog(`📦 Synced ${persistResult.messageCount} message commit(s) and ${persistResult.documentCount} document commit(s) from worker.`);
+
+      setChannels(prev => [hydratedChannel, ...prev]);
+      await selectChannel(hydratedChannel);
+
+    } catch (error) {
+      addLog(`❌ Error joining channel by address: ${error}`);
+    } finally {
+      if (tempRpc) {
+        await disposeStub(tempRpc);
+      }
+    }
+  };
+
   const selectChannel = async (channel: Channel) => {
     if (subscriptionActiveRef.current) {
       await unsubscribeFromRpc();
@@ -698,6 +867,8 @@ function App() {
         setConnectionStatus(reason.includes('disposing the main stub') ? 'disconnected' : 'error');
       });
 
+      let preloadCommits: CommitSnapshot[] | null = null;
+
       try {
         const handshake = await rpc.hello('webui-handshake');
         addLog(`🤝 Handshake response: ${handshake}`);
@@ -723,7 +894,7 @@ function App() {
         currentChannelRef.current = activeChannel;
       } else {
         try {
-          await rpc.loadDocument(channel.docId);
+          preloadCommits = await rpc.loadDocument(channel.docId);
         } catch {
           const initialCommit = await createCommit(JSON.stringify({ type: 'init', channel: channel.name }), []);
           const result = await rpc.createDoc({
@@ -736,18 +907,35 @@ function App() {
           activeChannel = { ...channel, docId: newDocId };
           setCurrentChannel(activeChannel);
           currentChannelRef.current = activeChannel;
+          preloadCommits = [];
         }
       }
 
       setConnectionStatus('connected');
       addLog(`📡 Connected to channel: ${activeChannel.name}`);
 
+      let storedDocument = await sqliteService.getChannelDocument(activeChannel.id);
+      let commitHistory = await sqliteService.getChannelDocumentCommits(activeChannel.id);
+
+      if (!storedDocument && (!commitHistory.length || !preloadCommits || preloadCommits.length === 0)) {
+        addLog('📭 No local history available and nothing retrieved from worker. Waiting for live updates.');
+      }
+
+      if (!storedDocument && preloadCommits && preloadCommits.length > 0) {
+        addLog('📥 Local document not found. Hydrating from worker history…');
+        const persistResult = await persistCommitsForChannel(activeChannel, preloadCommits);
+        if (persistResult.messageCount || persistResult.documentCount) {
+          addLog(`📦 Imported ${persistResult.messageCount} message(s) and ${persistResult.documentCount} document revision(s).`);
+          setChannels(prev => prev.map((c) => c.id === activeChannel.id ? { ...c, lastModified: persistResult.latestActivity } : c));
+        }
+        storedDocument = await sqliteService.getChannelDocument(activeChannel.id);
+        commitHistory = await sqliteService.getChannelDocumentCommits(activeChannel.id);
+      }
+
       const channelMessages = await sqliteService.getMessagesForChannel(activeChannel.id);
       setMessages(channelMessages);
       processedCommitHashesRef.current = new Set(channelMessages.map(message => message.commitHash));
 
-      const storedDocument = await sqliteService.getChannelDocument(activeChannel.id);
-      const commitHistory = await sqliteService.getChannelDocumentCommits(activeChannel.id);
       const mappedHistory: DocumentCommitEntry[] = commitHistory
         .map((commit) => ({
           commitHash: commit.commitHash,
@@ -756,6 +944,8 @@ function App() {
           timestamp: commit.timestamp
         }))
         .sort((a, b) => a.timestamp - b.timestamp);
+
+      mappedHistory.forEach((entry) => processedCommitHashesRef.current.add(entry.commitHash));
 
       setDocumentHistory(mappedHistory);
       mappedHistory.forEach((entry) => registerAuthor(entry.user));
@@ -766,7 +956,8 @@ function App() {
       setDocumentContent(initialDocumentContent);
       latestDocumentContentRef.current = initialDocumentContent;
       docCommitHashRef.current = storedDocument?.latestCommitHash ?? null;
-      setLastDocumentSync(storedDocument?.updatedAt ?? null);
+      const updatedSync = storedDocument?.updatedAt ?? null;
+      setLastDocumentSync(updatedSync);
       setTimeout(() => {
         applyingRemoteDocumentRef.current = false;
       }, 0);
@@ -902,6 +1093,12 @@ function App() {
     const entry = documentHistory[historyIndex];
     addLog(`⏪ Restoring document to ${entry.commitHash.substring(0, 8)} by ${entry.user}`);
 
+    const subset = documentHistory.slice(0, historyIndex + 1);
+    if (subset.length) {
+      subset.forEach((item) => registerAuthor(item.user));
+      restoreAttributionRef.current = computeCharAttribution(subset);
+    }
+
     setHistoryIndex(null);
     setDocumentContent(entry.content);
     latestDocumentContentRef.current = entry.content;
@@ -1031,6 +1228,24 @@ function App() {
                   +
                 </button>
               </div>
+              <div className="join-channel">
+                <input
+                  type="text"
+                  placeholder="Channel address"
+                  value={joinAddressInput}
+                  onChange={(e) => setJoinAddressInput(e.target.value)}
+                  className="channel-input"
+                />
+                <button
+                  onClick={() => {
+                    joinChannelByAddress(joinAddressInput);
+                    setJoinAddressInput('');
+                  }}
+                  className="join-button"
+                >
+                  Join
+                </button>
+              </div>
             </div>
 
             <div className="channels-list">
@@ -1044,6 +1259,14 @@ function App() {
                   <div className="channel-name">#{channel.name}</div>
                   <div className="channel-meta">
                     {new Date(channel.lastModified).toLocaleDateString()}
+                  </div>
+                  <div className="channel-address">
+                    <input type="text" readOnly value={channel.docId} />
+                    <button onClick={(e) => {
+                      e.stopPropagation();
+                      navigator.clipboard.writeText(channel.docId);
+                      addLog('✅ Copied channel address to clipboard');
+                    }}>Copy</button>
                   </div>
                 </div>
               ))}

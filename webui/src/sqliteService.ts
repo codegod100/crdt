@@ -465,17 +465,17 @@ class SQLiteService {
     }
   }
 
-  async createChannel(name: string): Promise<Channel> {
+  async createChannel(name: string, docId?: string): Promise<Channel> {
     await this.ensureInitialized();
 
     const channelId = `chan-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-    // Save channel with temporary docId
-    const tempDocId = `temp-${channelId}`;
+    // Save channel with temporary docId if not provided
+    const finalDocId = docId || `temp-${channelId}`;
     const channel: Channel = {
       id: channelId,
       name,
-      docId: tempDocId,
+      docId: finalDocId,
       createdAt: Date.now(),
       lastModified: Date.now()
     };
@@ -568,6 +568,25 @@ class SQLiteService {
     } else if (this.db && this.db.exec) {
       this.db.exec(sql, {
         bind: [docId, Date.now(), channelId]
+      });
+    }
+  }
+
+  async updateChannelLastModified(channelId: string, lastModified: number): Promise<void> {
+    await this.ensureInitialized();
+
+    const sql = `
+      UPDATE channels SET last_modified = ? WHERE id = ?
+    `;
+
+    if (this.db && typeof this.db === 'function') {
+      await this.db('exec', {
+        sql,
+        bind: [lastModified, channelId]
+      });
+    } else if (this.db && this.db.exec) {
+      this.db.exec(sql, {
+        bind: [lastModified, channelId]
       });
     }
   }
