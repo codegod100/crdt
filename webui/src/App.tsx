@@ -290,7 +290,7 @@ function App() {
   const [currentChannel, setCurrentChannel] = useState<Channel | null>(null);
   const [userName, setUserName] = useState('');
   const [messageInput, setMessageInput] = useState('');
-  const [activeView, setActiveView] = useState<'chat' | 'document'>('chat');
+  const [activeView, setActiveView] = useState<'chat' | 'document'>('document');
   const [documentContent, setDocumentContent] = useState('');
   const [lastDocumentSync, setLastDocumentSync] = useState<number | null>(null);
   const [isDocumentSyncing, setIsDocumentSyncing] = useState(false);
@@ -663,7 +663,7 @@ function App() {
     setAuthorColors({});
     authorColorIndexRef.current = 0;
     docCommitHashRef.current = null;
-    setActiveView('chat');
+    setActiveView('document');
     setConnectionStatus('connecting');
     addLog(`🔌 Opening RPC session for channel ${channel.name}`);
 

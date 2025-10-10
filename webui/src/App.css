@@ -194,6 +194,7 @@ button {
   grid-template-columns: 320px 1fr;
   gap: 2rem;
   align-items: flex-start;
+  margin-bottom: 2rem;
 }
 
 .channels-sidebar {
@@ -206,6 +207,9 @@ button {
   gap: 1.5rem;
 }
 
+main {
+}
+
 .messages-area {
   background: #ffffff;
   border: 1px solid #e9ecef;
@@ -213,8 +217,6 @@ button {
   padding: 1.5rem;
   display: flex;
   flex-direction: column;
-  min-height: 480px;
-  max-height: 70vh;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
 }
 
@@ -363,6 +365,7 @@ button {
   position: relative;
   z-index: 1;
   color: #213547;
+  flex: 1;
 }
 
 .document-textarea:focus {
@@ -390,6 +393,9 @@ button {
   border: 1px solid #dfe4ea;
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.04);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
 }
 
 .document-editor-area:focus-within {
