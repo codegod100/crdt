@@ -225,6 +225,45 @@ button {
   margin-bottom: 1rem;
 }
 
+.channel-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.channel-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(52, 152, 219, 0.08);
+  padding: 0.3rem 0.5rem;
+  border-radius: 999px;
+}
+
+.tab-button {
+  background: transparent;
+  border: 1px solid rgba(52, 152, 219, 0.35);
+  color: #2c3e50;
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tab-button:hover {
+  border-color: #3498db;
+  color: #1e6aa8;
+}
+
+.tab-button.active {
+  background: #3498db;
+  border-color: #3498db;
+  color: #ffffff;
+  box-shadow: 0 6px 18px rgba(52, 152, 219, 0.3);
+}
+
 .messages-container {
   flex: 1;
   overflow-y: auto;
@@ -236,6 +275,110 @@ button {
   flex-direction: column;
   gap: 0.75rem;
   min-height: 0;
+}
+
+.channel-item {
+  background: #ffffff;
+  border: 1px solid #e3e7eb;
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.75rem;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.2s ease;
+}
+
+.channel-item:hover {
+  border-color: #3498db;
+  box-shadow: 0 10px 30px rgba(52, 152, 219, 0.15);
+  transform: translateY(-1px);
+}
+
+.channel-item.active {
+  border-color: #3498db;
+  background: #eaf4ff;
+  box-shadow: 0 8px 24px rgba(52, 152, 219, 0.2);
+}
+
+.channel-name {
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.channel-meta {
+  color: #6c757d;
+  font-size: 0.85rem;
+}
+
+.document-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  flex: 1;
+}
+
+.document-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+}
+
+.document-status {
+  font-size: 0.95rem;
+  color: #2c3e50;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.document-status strong {
+  font-weight: 600;
+}
+
+.document-sync-indicator {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #27ae60;
+  background: rgba(39, 174, 96, 0.1);
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+}
+
+.document-sync-indicator.syncing {
+  color: #f39c12;
+  background: rgba(243, 156, 18, 0.15);
+}
+
+.document-textarea {
+  width: 100%;
+  min-height: 280px;
+  resize: vertical;
+  padding: 1rem 1.1rem;
+  border: 1px solid #dfe4ea;
+  border-radius: 8px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 1rem;
+  line-height: 1.6;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.document-textarea:focus {
+  outline: none;
+  border-color: #3498db;
+  box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.18);
+}
+
+.document-textarea:disabled {
+  background: #f1f3f6;
+  color: #6c757d;
+  cursor: not-allowed;
+}
+
+.document-hints {
+  font-size: 0.9rem;
+  color: #6c757d;
+  line-height: 1.4;
 }
 
 .messages-container::-webkit-scrollbar {
@@ -612,6 +755,32 @@ button {
     color: #f8fafc;
   }
 
+  .channel-actions {
+    gap: 1rem;
+  }
+
+  .channel-tabs {
+    background: rgba(37, 99, 235, 0.12);
+  }
+
+  .tab-button {
+    border-color: rgba(96, 165, 250, 0.45);
+    color: #dbeafe;
+    background: rgba(15, 23, 42, 0.65);
+  }
+
+  .tab-button:hover {
+    border-color: #60a5fa;
+    color: #e0f2fe;
+  }
+
+  .tab-button.active {
+    background: #2563eb;
+    border-color: #60a5fa;
+    color: #f8fafc;
+    box-shadow: 0 12px 30px rgba(37, 99, 235, 0.35);
+  }
+
   .messages-container {
     background: #0b1120;
     border-color: #1e293b;
@@ -656,6 +825,49 @@ button {
   .welcome-screen {
     text-align: center;
     color: inherit;
+  }
+
+  .document-toolbar {
+    color: #cbd5f5;
+  }
+
+  .document-status {
+    color: #cbd5f5;
+  }
+
+  .document-status strong {
+    color: #f8fafc;
+  }
+
+  .document-sync-indicator {
+    background: rgba(34, 197, 94, 0.18);
+    color: #86efac;
+  }
+
+  .document-sync-indicator.syncing {
+    background: rgba(251, 191, 36, 0.24);
+    color: #fde68a;
+  }
+
+  .document-textarea {
+    background: #0f172a;
+    border-color: #1f2937;
+    color: #f8fafc;
+    box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.4);
+  }
+
+  .document-textarea:focus {
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.25);
+  }
+
+  .document-textarea:disabled {
+    background: #1f2937;
+    color: #94a3b8;
+  }
+
+  .document-hints {
+    color: #94a3b8;
   }
 
   .status-indicator.disconnected {

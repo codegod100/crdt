@@ -102,19 +102,27 @@ async function createCommit(content: string, parents: string[] = []): Promise<Co
 
 function App() {
   const [logs, setLogs] = useState<string[]>([]);
-   const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
-   const [channels, setChannels] = useState<Channel[]>([]);
+  const [connectionStatus, setConnectionStatus] = useState<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
+  const [channels, setChannels] = useState<Channel[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [sqliteInitialized, setSqliteInitialized] = useState(false);
   const [currentChannel, setCurrentChannel] = useState<Channel | null>(null);
   const [userName, setUserName] = useState('');
   const [messageInput, setMessageInput] = useState('');
+  const [activeView, setActiveView] = useState<'chat' | 'document'>('chat');
+  const [documentContent, setDocumentContent] = useState('');
+  const [lastDocumentSync, setLastDocumentSync] = useState<number | null>(null);
+  const [isDocumentSyncing, setIsDocumentSyncing] = useState(false);
   const rpcRef = useRef<RpcStub<BeelayApi> | null>(null);
   const clientTargetRef = useRef<ClientEventTarget | null>(null);
   const subscriptionActiveRef = useRef(false);
   const subscriptionDocIdRef = useRef<string | null>(null);
   const currentChannelRef = useRef<Channel | null>(null);
   const processedCommitHashesRef = useRef<Set<string>>(new Set());
+  const documentDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const applyingRemoteDocumentRef = useRef(false);
+  const docCommitHashRef = useRef<string | null>(null);
+  const latestDocumentContentRef = useRef('');
 
   useEffect(() => {
     currentChannelRef.current = currentChannel;
@@ -123,6 +131,16 @@ function App() {
   useEffect(() => {
     processedCommitHashesRef.current = new Set(messages.map(message => message.commitHash));
   }, [messages]);
+
+  useEffect(() => {
+    latestDocumentContentRef.current = documentContent;
+  }, [documentContent]);
+
+  useEffect(() => () => {
+    if (documentDebounceRef.current) {
+      clearTimeout(documentDebounceRef.current);
+    }
+  }, []);
 
   // Initialize SQLite on component mount
   useEffect(() => {
@@ -162,15 +180,51 @@ function App() {
     try {
       const contentArray = toUint8Array(commitPayload.contents);
       const decoded = new TextDecoder().decode(contentArray);
-      const messageData = JSON.parse(decoded);
+      const messageData = JSON.parse(decoded) as { type?: string; user?: string; content?: unknown; timestamp?: number };
+      const commitHash = commitPayload.hash;
 
-      if (!messageData.user || !messageData.content) {
-        addLog(`⚠️  Received commit with unexpected payload: ${decoded}`);
+      if (processedCommitHashesRef.current.has(commitHash)) {
         return;
       }
 
-      const commitHash = commitPayload.hash;
-      if (processedCommitHashesRef.current.has(commitHash)) {
+      const payloadType = typeof messageData.type === 'string' ? messageData.type : 'message';
+
+      if (payloadType === 'document') {
+        if (typeof messageData.content !== 'string') {
+          addLog(`⚠️  Document commit missing textual content: ${decoded}`);
+          processedCommitHashesRef.current.add(commitHash);
+          return;
+        }
+
+        applyingRemoteDocumentRef.current = true;
+        setDocumentContent(messageData.content);
+        latestDocumentContentRef.current = messageData.content;
+        if (documentDebounceRef.current) {
+          clearTimeout(documentDebounceRef.current);
+          documentDebounceRef.current = null;
+        }
+        docCommitHashRef.current = commitHash;
+        const updatedAt = messageData.timestamp ?? Date.now();
+        setLastDocumentSync(updatedAt);
+
+        await sqliteService.saveChannelDocument({
+          channelId: currentChannelRef.current.id,
+          content: messageData.content,
+          updatedAt,
+          latestCommitHash: commitHash
+        });
+
+        processedCommitHashesRef.current.add(commitHash);
+        setTimeout(() => {
+          applyingRemoteDocumentRef.current = false;
+        }, 0);
+        addLog(`📄 Document update ${commitHash.substring(0, 8)} applied`);
+        return;
+      }
+
+      if (!messageData.user || typeof messageData.content !== 'string') {
+        addLog(`⚠️  Received commit with unexpected payload: ${decoded}`);
+        processedCommitHashesRef.current.add(commitHash);
         return;
       }
 
@@ -326,6 +380,7 @@ function App() {
 
     setCurrentChannel(channel);
     currentChannelRef.current = channel;
+  setActiveView('chat');
     setConnectionStatus('connecting');
     addLog(`🔌 Opening RPC session for channel ${channel.name}`);
 
@@ -389,6 +444,17 @@ function App() {
       setMessages(channelMessages);
       processedCommitHashesRef.current = new Set(channelMessages.map(message => message.commitHash));
 
+      const storedDocument = await sqliteService.getChannelDocument(activeChannel.id);
+      applyingRemoteDocumentRef.current = true;
+      const initialDocumentContent = storedDocument?.content ?? '';
+      setDocumentContent(initialDocumentContent);
+      latestDocumentContentRef.current = initialDocumentContent;
+      docCommitHashRef.current = storedDocument?.latestCommitHash ?? null;
+      setLastDocumentSync(storedDocument?.updatedAt ?? null);
+      setTimeout(() => {
+        applyingRemoteDocumentRef.current = false;
+      }, 0);
+
       await subscribeToRpc(activeChannel.docId);
 
     } catch (error) {
@@ -426,6 +492,7 @@ function App() {
 
     try {
       const messageContent = {
+        type: 'message',
         user: userName.trim(),
         content,
         timestamp: Date.now()
@@ -450,6 +517,62 @@ function App() {
     }
   };
 
+  const sendDocumentUpdate = async (content: string) => {
+    if (!currentChannel) {
+      addLog('ℹ️ Cannot sync document: no channel selected');
+      return;
+    }
+
+    if (!currentChannel.docId) {
+      addLog('ℹ️ Cannot sync document: channel is still provisioning');
+      return;
+    }
+
+    if (!rpcRef.current) {
+      addLog('ℹ️ Cannot sync document: RPC connection not ready');
+      return;
+    }
+
+    const payload = {
+      type: 'document',
+      user: userName.trim() || 'anonymous',
+      content,
+      timestamp: Date.now()
+    };
+
+    try {
+      setIsDocumentSyncing(true);
+      addLog('📝 Sending document update via RPC');
+      const result = await rpcRef.current.addWorkerCommit(currentChannel.docId, JSON.stringify(payload));
+      addLog(`📨 Document RPC response: ${JSON.stringify(result)}`);
+    } catch (error) {
+      addLog(`❌ Error syncing document: ${error}`);
+    } finally {
+      setIsDocumentSyncing(false);
+    }
+  };
+
+  const scheduleDocumentSync = (content: string) => {
+    if (documentDebounceRef.current) {
+      clearTimeout(documentDebounceRef.current);
+    }
+
+    documentDebounceRef.current = setTimeout(() => {
+      void sendDocumentUpdate(content);
+    }, 500);
+  };
+
+  const handleDocumentChange = (value: string) => {
+    setDocumentContent(value);
+    if (applyingRemoteDocumentRef.current) {
+      return;
+    }
+    scheduleDocumentSync(value);
+  };
+
+  const canEditDocument = connectionStatus === 'connected' && Boolean(rpcRef.current);
+  const formattedDocumentSync = lastDocumentSync ? new Date(lastDocumentSync).toLocaleString() : 'Never';
+
   const leaveChannel = async () => {
     await unsubscribeFromRpc();
     if (rpcRef.current) {
@@ -461,6 +584,16 @@ function App() {
     setMessages([]);
     processedCommitHashesRef.current.clear();
     setConnectionStatus('disconnected');
+    setActiveView('chat');
+    setDocumentContent('');
+    latestDocumentContentRef.current = '';
+    docCommitHashRef.current = null;
+    setLastDocumentSync(null);
+    setIsDocumentSyncing(false);
+    if (documentDebounceRef.current) {
+      clearTimeout(documentDebounceRef.current);
+      documentDebounceRef.current = null;
+    }
     addLog("👋 Left channel");
   };
 
@@ -532,50 +665,95 @@ function App() {
                 <div className="channel-header">
                   <h2>#{currentChannel.name}</h2>
                   <div className="channel-actions">
+                    <div className="channel-tabs">
+                      <button
+                        type="button"
+                        className={`tab-button ${activeView === 'chat' ? 'active' : ''}`}
+                        onClick={() => setActiveView('chat')}
+                      >
+                        Chat
+                      </button>
+                      <button
+                        type="button"
+                        className={`tab-button ${activeView === 'document' ? 'active' : ''}`}
+                        onClick={() => setActiveView('document')}
+                      >
+                        Document
+                      </button>
+                    </div>
                     <button onClick={leaveChannel} className="leave-button">
                       Leave
                     </button>
                   </div>
                 </div>
 
-                <div className="messages-container">
-                  {messages.length === 0 ? (
-                    <div className="empty-messages">
-                      <p>No messages yet. Start the conversation!</p>
-                    </div>
-                  ) : (
-                    messages.map((message) => (
-                      <div key={message.id} className="message-item">
-                        <div className="message-header">
-                          <span className="message-user">{message.user}</span>
-                          <span className="message-time">
-                            {new Date(message.timestamp).toLocaleTimeString()}
-                          </span>
+                {activeView === 'chat' ? (
+                  <>
+                    <div className="messages-container">
+                      {messages.length === 0 ? (
+                        <div className="empty-messages">
+                          <p>No messages yet. Start the conversation!</p>
                         </div>
-                        <div className="message-content">{message.content}</div>
-                      </div>
-                    ))
-                  )}
-                </div>
+                      ) : (
+                        messages.map((message) => (
+                          <div key={message.id} className="message-item">
+                            <div className="message-header">
+                              <span className="message-user">{message.user}</span>
+                              <span className="message-time">
+                                {new Date(message.timestamp).toLocaleTimeString()}
+                              </span>
+                            </div>
+                            <div className="message-content">{message.content}</div>
+                          </div>
+                        ))
+                      )}
+                    </div>
 
-                <div className="message-input-area">
-                  <input
-                    type="text"
-                    value={messageInput}
-                    onChange={(e) => setMessageInput(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
-                    placeholder="Type a message..."
-                    disabled={!userName.trim()}
-                    className="message-input"
-                  />
-                  <button
-                    onClick={sendMessage}
-                    disabled={!messageInput.trim() || !userName.trim()}
-                    className="send-button"
-                  >
-                    Send
-                  </button>
-                </div>
+                    <div className="message-input-area">
+                      <input
+                        type="text"
+                        value={messageInput}
+                        onChange={(e) => setMessageInput(e.target.value)}
+                        onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
+                        placeholder="Type a message..."
+                        disabled={!userName.trim()}
+                        className="message-input"
+                      />
+                      <button
+                        onClick={sendMessage}
+                        disabled={!messageInput.trim() || !userName.trim()}
+                        className="send-button"
+                      >
+                        Send
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="document-editor">
+                    <div className="document-toolbar">
+                      <div className="document-status">
+                        <strong>Last synced:</strong> {formattedDocumentSync}
+                      </div>
+                      <div className={`document-sync-indicator ${isDocumentSyncing ? 'syncing' : 'idle'}`}>
+                        {isDocumentSyncing ? 'Syncing…' : 'Up to date'}
+                      </div>
+                    </div>
+                    <textarea
+                      value={documentContent}
+                      onChange={(e) => handleDocumentChange(e.target.value)}
+                      className="document-textarea"
+                      placeholder="Share notes, ideas, and drafts together..."
+                      disabled={!canEditDocument}
+                    />
+                    <div className="document-hints">
+                      {connectionStatus !== 'connected'
+                        ? 'Reconnect to sync live edits.'
+                        : !userName.trim()
+                          ? 'Tip: add a display name so collaborators know who you are.'
+                          : 'Edits are saved automatically and shared with everyone in the channel.'}
+                    </div>
+                  </div>
+                )}
               </>
             ) : (
               <div className="welcome-screen">

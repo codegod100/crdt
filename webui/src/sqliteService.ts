@@ -34,6 +34,13 @@ export interface Message {
   commitHash: string;
 }
 
+export interface ChannelDocument {
+  channelId: string;
+  content: string;
+  updatedAt: number;
+  latestCommitHash: string | null;
+}
+
 class SQLiteService {
   private db: any = null;
   private isInitialized = false;
@@ -170,6 +177,16 @@ class SQLiteService {
       CREATE INDEX IF NOT EXISTS idx_channels_doc_id ON channels (doc_id);
       CREATE INDEX IF NOT EXISTS idx_messages_channel_id ON messages (channel_id);
       CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages (timestamp);
+
+      CREATE TABLE IF NOT EXISTS channel_documents (
+        channel_id TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        latest_commit_hash TEXT,
+        FOREIGN KEY (channel_id) REFERENCES channels (id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_channel_documents_updated_at ON channel_documents (updated_at);
     `;
 
     if (this.db && typeof this.db === 'function') {
@@ -416,6 +433,7 @@ class SQLiteService {
       DELETE FROM channels;
       DELETE FROM commits;
       DELETE FROM documents;
+      DELETE FROM channel_documents;
     `;
 
     if (this.db && typeof this.db === 'function') {
@@ -634,6 +652,79 @@ class SQLiteService {
     }
 
     return [];
+  }
+
+  async saveChannelDocument(document: ChannelDocument): Promise<void> {
+    await this.ensureInitialized();
+
+    const sql = `
+      INSERT INTO channel_documents (channel_id, content, updated_at, latest_commit_hash)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(channel_id) DO UPDATE SET
+        content = excluded.content,
+        updated_at = excluded.updated_at,
+        latest_commit_hash = excluded.latest_commit_hash
+    `;
+
+    if (this.db && typeof this.db === 'function') {
+      await this.db('exec', {
+        sql,
+        bind: [document.channelId, document.content, document.updatedAt, document.latestCommitHash]
+      });
+    } else if (this.db && this.db.exec) {
+      this.db.exec(sql, {
+        bind: [document.channelId, document.content, document.updatedAt, document.latestCommitHash]
+      });
+    }
+  }
+
+  async getChannelDocument(channelId: string): Promise<ChannelDocument | null> {
+    await this.ensureInitialized();
+
+    const sql = `
+      SELECT channel_id, content, updated_at, latest_commit_hash
+      FROM channel_documents
+      WHERE channel_id = ?
+    `;
+
+    if (this.db && typeof this.db === 'function') {
+      const result = await this.db('exec', {
+        sql,
+        bind: [channelId],
+        returnValue: 'resultRows'
+      });
+
+      let rows: any[] = [];
+      if (Array.isArray(result)) {
+        rows = result;
+      } else if (result?.result?.resultRows) {
+        rows = result.result.resultRows;
+      } else if (result?.resultRows) {
+        rows = result.resultRows;
+      }
+
+      if (Array.isArray(rows) && rows.length > 0) {
+        const [id, content, updatedAt, hash] = rows[0];
+        return {
+          channelId: id,
+          content,
+          updatedAt,
+          latestCommitHash: hash ?? null
+        };
+      }
+    } else if (this.db && this.db.selectObject) {
+      const row = this.db.selectObject(sql, [channelId]);
+      if (row) {
+        return {
+          channelId: row.channel_id,
+          content: row.content,
+          updatedAt: row.updated_at,
+          latestCommitHash: row.latest_commit_hash ?? null
+        };
+      }
+    }
+
+    return null;
   }
 
   private async ensureInitialized(): Promise<void> {
