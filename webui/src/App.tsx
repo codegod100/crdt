@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react'
 import { newWebSocketRpcSession, RpcStub, RpcTarget } from 'capnweb'
 import { sqliteService, type Channel, type Message, type ChannelDocumentCommit } from './sqliteService'
 import './App.css'
@@ -300,6 +300,8 @@ function App() {
   const [authorColors, setAuthorColors] = useState<Record<string, string>>({});
   const rpcRef = useRef<RpcStub<BeelayApi> | null>(null);
   const clientTargetRef = useRef<ClientEventTarget | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const cursorRef = useRef<{ start: number; end: number } | null>(null);
   const subscriptionActiveRef = useRef(false);
   const subscriptionDocIdRef = useRef<string | null>(null);
   const currentChannelRef = useRef<Channel | null>(null);
@@ -890,7 +892,10 @@ function App() {
     scheduleDocumentSync(entry.content);
   };
 
-  const handleDocumentChange = (value: string) => {
+  const handleDocumentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const { value, selectionStart, selectionEnd } = e.target;
+    cursorRef.current = { start: selectionStart, end: selectionEnd };
+
     setDocumentContent(value);
     if (applyingRemoteDocumentRef.current) {
       return;
@@ -898,6 +903,14 @@ function App() {
     registerAuthor(userName.trim() || 'anonymous');
     scheduleDocumentSync(value);
   };
+
+  useLayoutEffect(() => {
+    if (cursorRef.current && textareaRef.current) {
+      textareaRef.current.selectionStart = cursorRef.current.start;
+      textareaRef.current.selectionEnd = cursorRef.current.end;
+      cursorRef.current = null;
+    }
+  });
 
   const historyLength = documentHistory.length;
   const sliderMax = historyLength > 0 ? historyLength - 1 : 0;
@@ -1154,8 +1167,9 @@ function App() {
                       </div>
 
                       <textarea
+                        ref={textareaRef}
                         value={textareaValue}
-                        onChange={(e) => handleDocumentChange(e.target.value)}
+                        onChange={handleDocumentChange}
                         className="document-textarea"
                         placeholder="Share notes, ideas, and drafts together..."
                         disabled={!canEditDocument}
