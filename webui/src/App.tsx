@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { newWebSocketRpcSession, RpcStub, RpcTarget } from 'capnweb'
-import { sqliteService, type Channel, type Message } from './sqliteService'
+import { sqliteService, type Channel, type Message, type ChannelDocumentCommit } from './sqliteService'
 import './App.css'
 
 const symbolDispose: symbol = typeof (Symbol as { dispose?: symbol }).dispose === 'symbol'
@@ -48,6 +48,187 @@ interface ServerCommitPayload {
   parents: string[];
   hash: string;
   contents: string | number[] | Uint8Array;
+}
+
+interface DocumentCommitEntry {
+  commitHash: string;
+  user: string;
+  content: string;
+  timestamp: number;
+}
+
+interface CharAttribution {
+  char: string;
+  author: string;
+}
+
+interface LineSegment {
+  author: string;
+  text: string;
+}
+
+const AUTHOR_COLORS = [
+  '#0ea5e9',
+  '#ec4899',
+  '#8b5cf6',
+  '#22c55e',
+  '#f97316',
+  '#facc15',
+  '#06b6d4',
+  '#14b8a6'
+];
+
+function formatTimestamp(value: number): string {
+  return new Date(value).toLocaleString();
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  let parsed = hex.replace('#', '');
+  if (parsed.length === 3) {
+    parsed = parsed.split('').map((char) => char + char).join('');
+  }
+  if (parsed.length !== 6) {
+    return `rgba(148, 163, 184, ${alpha})`;
+  }
+  const r = parseInt(parsed.slice(0, 2), 16);
+  const g = parseInt(parsed.slice(2, 4), 16);
+  const b = parseInt(parsed.slice(4, 6), 16);
+  return `rgba(${Number.isNaN(r) ? 148 : r}, ${Number.isNaN(g) ? 163 : g}, ${Number.isNaN(b) ? 184 : b}, ${alpha})`;
+}
+
+function arrayFromString(value: string): string[] {
+  return Array.from(value);
+}
+
+function mergeAttribution(
+  previous: CharAttribution[],
+  nextChars: string[],
+  fallbackAuthor: string
+): CharAttribution[] {
+  if (previous.length === 0) {
+    return nextChars.map((char) => ({ char, author: fallbackAuthor }));
+  }
+
+  const prevChars = previous.map((item) => item.char);
+  const prevLength = prevChars.length;
+  const nextLength = nextChars.length;
+
+  if (prevLength === 0) {
+    return nextChars.map((char) => ({ char, author: fallbackAuthor }));
+  }
+
+  const dp: number[][] = Array.from({ length: prevLength + 1 }, () => new Array(nextLength + 1).fill(0));
+
+  for (let i = prevLength - 1; i >= 0; i -= 1) {
+    for (let j = nextLength - 1; j >= 0; j -= 1) {
+      if (prevChars[i] === nextChars[j]) {
+        dp[i][j] = dp[i + 1][j + 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1]);
+      }
+    }
+  }
+
+  const result: CharAttribution[] = [];
+  let i = 0;
+  let j = 0;
+
+  while (i < prevLength && j < nextLength) {
+    if (prevChars[i] === nextChars[j]) {
+      result.push({ char: nextChars[j], author: previous[i].author });
+      i += 1;
+      j += 1;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      i += 1;
+    } else {
+      result.push({ char: nextChars[j], author: fallbackAuthor });
+      j += 1;
+    }
+  }
+
+  while (j < nextLength) {
+    result.push({ char: nextChars[j], author: fallbackAuthor });
+    j += 1;
+  }
+
+  return result;
+}
+
+function computeCharAttribution(entries: DocumentCommitEntry[]): CharAttribution[] {
+  let attribution: CharAttribution[] = [];
+
+  for (const entry of entries) {
+    if (!entry.content) {
+      attribution = [];
+      continue;
+    }
+
+    const chars = arrayFromString(entry.content);
+    if (attribution.length === 0) {
+      attribution = chars.map((char) => ({ char, author: entry.user }));
+      continue;
+    }
+
+    attribution = mergeAttribution(attribution, chars, entry.user);
+  }
+
+  return attribution;
+}
+
+function ensureAttributionMatchesContent(
+  base: CharAttribution[],
+  content: string,
+  fallbackAuthor: string
+): CharAttribution[] {
+  const contentChars = arrayFromString(content);
+  if (base.length === 0 && contentChars.length === 0) {
+    return [];
+  }
+  return mergeAttribution(base, contentChars, fallbackAuthor);
+}
+
+function toOverlayLines(attribution: CharAttribution[], fallbackAuthor: string): LineSegment[][] {
+  if (attribution.length === 0) {
+    return [[{ author: fallbackAuthor, text: '' }]];
+  }
+
+  const lines: LineSegment[][] = [];
+  let segments: LineSegment[] = [];
+  let current: LineSegment | null = null;
+
+  const flushSegment = () => {
+    if (current) {
+      segments.push(current);
+      current = null;
+    }
+  };
+
+  const flushLine = (authorForEmpty: string) => {
+    flushSegment();
+    if (segments.length === 0) {
+      segments.push({ author: authorForEmpty, text: '' });
+    }
+    lines.push(segments);
+    segments = [];
+  };
+
+  for (const { char, author } of attribution) {
+    if (char === '\n') {
+      flushLine(author);
+      continue;
+    }
+
+    if (!current || current.author !== author) {
+      flushSegment();
+      current = { author, text: char };
+    } else {
+      current.text += char;
+    }
+  }
+
+  flushLine(attribution.at(-1)?.author ?? fallbackAuthor);
+
+  return lines;
 }
 
 class ClientEventTarget extends RpcTarget {
@@ -113,6 +294,10 @@ function App() {
   const [documentContent, setDocumentContent] = useState('');
   const [lastDocumentSync, setLastDocumentSync] = useState<number | null>(null);
   const [isDocumentSyncing, setIsDocumentSyncing] = useState(false);
+  const [documentHistory, setDocumentHistory] = useState<DocumentCommitEntry[]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+  const [charAttribution, setCharAttribution] = useState<CharAttribution[]>([]);
+  const [authorColors, setAuthorColors] = useState<Record<string, string>>({});
   const rpcRef = useRef<RpcStub<BeelayApi> | null>(null);
   const clientTargetRef = useRef<ClientEventTarget | null>(null);
   const subscriptionActiveRef = useRef(false);
@@ -123,6 +308,33 @@ function App() {
   const applyingRemoteDocumentRef = useRef(false);
   const docCommitHashRef = useRef<string | null>(null);
   const latestDocumentContentRef = useRef('');
+  const authorColorIndexRef = useRef(0);
+
+  const registerAuthor = useCallback((rawUser: string) => {
+    const user = rawUser?.trim() || 'anonymous';
+    setAuthorColors((prev) => {
+      if (prev[user]) {
+        return prev;
+      }
+      const color = AUTHOR_COLORS[authorColorIndexRef.current % AUTHOR_COLORS.length];
+      authorColorIndexRef.current += 1;
+      return {
+        ...prev,
+        [user]: color
+      };
+    });
+  }, []);
+
+  const addDocumentCommitToHistory = useCallback((entry: DocumentCommitEntry) => {
+    setDocumentHistory((prev) => {
+      if (prev.some((existing) => existing.commitHash === entry.commitHash)) {
+        return prev;
+      }
+      const next = [...prev, entry].sort((a, b) => a.timestamp - b.timestamp);
+      return next;
+    });
+    registerAuthor(entry.user);
+  }, [registerAuthor]);
 
   useEffect(() => {
     currentChannelRef.current = currentChannel;
@@ -135,6 +347,53 @@ function App() {
   useEffect(() => {
     latestDocumentContentRef.current = documentContent;
   }, [documentContent]);
+
+  useEffect(() => {
+    if (!documentHistory.length) {
+      if (historyIndex !== null) {
+        setHistoryIndex(null);
+      }
+      return;
+    }
+
+    if (historyIndex !== null && historyIndex > documentHistory.length - 1) {
+      setHistoryIndex(documentHistory.length - 1);
+    }
+  }, [documentHistory, historyIndex]);
+
+  useEffect(() => {
+    const fallbackUser = userName.trim() || 'anonymous';
+
+    if (!documentHistory.length) {
+      if (documentContent.length === 0) {
+        setCharAttribution([]);
+        return;
+      }
+
+      registerAuthor(fallbackUser);
+      setCharAttribution(ensureAttributionMatchesContent([], documentContent, fallbackUser));
+      return;
+    }
+
+    const maxIndex = documentHistory.length - 1;
+    const targetIndex = historyIndex === null ? maxIndex : Math.min(historyIndex, maxIndex);
+    const subset = documentHistory.slice(0, targetIndex + 1);
+
+    subset.forEach((entry) => registerAuthor(entry.user));
+
+    const baseAttribution = computeCharAttribution(subset);
+    const targetContent = historyIndex === null
+      ? documentContent
+      : subset[subset.length - 1]?.content ?? documentContent;
+
+    const finalAttribution = ensureAttributionMatchesContent(baseAttribution, targetContent, fallbackUser);
+
+    if (historyIndex === null) {
+      registerAuthor(fallbackUser);
+    }
+
+    setCharAttribution(finalAttribution);
+  }, [documentHistory, historyIndex, documentContent, userName, registerAuthor]);
 
   useEffect(() => () => {
     if (documentDebounceRef.current) {
@@ -212,6 +471,24 @@ function App() {
           content: messageData.content,
           updatedAt,
           latestCommitHash: commitHash
+        });
+
+        const user = messageData.user?.trim() || 'anonymous';
+        const commitRecord: ChannelDocumentCommit = {
+          channelId: currentChannelRef.current.id,
+          commitHash,
+          user,
+          content: messageData.content,
+          timestamp: updatedAt
+        };
+
+        await sqliteService.saveChannelDocumentCommit(commitRecord);
+
+        addDocumentCommitToHistory({
+          commitHash,
+          user,
+          content: messageData.content,
+          timestamp: updatedAt
         });
 
         processedCommitHashesRef.current.add(commitHash);
@@ -345,8 +622,6 @@ function App() {
     }
   };
 
-
-
   const disposeStub = async (stub: RpcStub<BeelayApi>) => {
     try {
       const disposable = stub as unknown as DisposableStub;
@@ -380,7 +655,15 @@ function App() {
 
     setCurrentChannel(channel);
     currentChannelRef.current = channel;
-  setActiveView('chat');
+    setDocumentContent('');
+    latestDocumentContentRef.current = '';
+    setDocumentHistory([]);
+    setHistoryIndex(null);
+  setCharAttribution([]);
+    setAuthorColors({});
+    authorColorIndexRef.current = 0;
+    docCommitHashRef.current = null;
+    setActiveView('chat');
     setConnectionStatus('connecting');
     addLog(`🔌 Opening RPC session for channel ${channel.name}`);
 
@@ -445,6 +728,20 @@ function App() {
       processedCommitHashesRef.current = new Set(channelMessages.map(message => message.commitHash));
 
       const storedDocument = await sqliteService.getChannelDocument(activeChannel.id);
+      const commitHistory = await sqliteService.getChannelDocumentCommits(activeChannel.id);
+      const mappedHistory: DocumentCommitEntry[] = commitHistory
+        .map((commit) => ({
+          commitHash: commit.commitHash,
+          user: commit.user?.trim() || 'anonymous',
+          content: commit.content,
+          timestamp: commit.timestamp
+        }))
+        .sort((a, b) => a.timestamp - b.timestamp);
+
+      setDocumentHistory(mappedHistory);
+      mappedHistory.forEach((entry) => registerAuthor(entry.user));
+      setHistoryIndex(null);
+
       applyingRemoteDocumentRef.current = true;
       const initialDocumentContent = storedDocument?.content ?? '';
       setDocumentContent(initialDocumentContent);
@@ -540,6 +837,8 @@ function App() {
       timestamp: Date.now()
     };
 
+    registerAuthor(payload.user);
+
     try {
       setIsDocumentSyncing(true);
       addLog('📝 Sending document update via RPC');
@@ -562,16 +861,71 @@ function App() {
     }, 500);
   };
 
+  const handleHistorySliderChange = (nextIndex: number) => {
+    if (!documentHistory.length) {
+      return;
+    }
+
+    const boundedIndex = Math.max(0, Math.min(nextIndex, documentHistory.length - 1));
+
+    if (boundedIndex >= documentHistory.length - 1) {
+      setHistoryIndex(null);
+    } else {
+      setHistoryIndex(boundedIndex);
+    }
+  };
+
+  const handleRestoreVersion = () => {
+    if (historyIndex === null || !documentHistory[historyIndex]) {
+      return;
+    }
+
+    const entry = documentHistory[historyIndex];
+    addLog(`⏪ Restoring document to ${entry.commitHash.substring(0, 8)} by ${entry.user}`);
+
+    setHistoryIndex(null);
+    setDocumentContent(entry.content);
+    latestDocumentContentRef.current = entry.content;
+    registerAuthor(userName.trim() || entry.user);
+    scheduleDocumentSync(entry.content);
+  };
+
   const handleDocumentChange = (value: string) => {
     setDocumentContent(value);
     if (applyingRemoteDocumentRef.current) {
       return;
     }
+    registerAuthor(userName.trim() || 'anonymous');
     scheduleDocumentSync(value);
   };
 
-  const canEditDocument = connectionStatus === 'connected' && Boolean(rpcRef.current);
+  const historyLength = documentHistory.length;
+  const sliderMax = historyLength > 0 ? historyLength - 1 : 0;
+  const sliderValue = historyLength > 0
+    ? (historyIndex === null ? sliderMax : Math.max(0, Math.min(historyIndex, sliderMax)))
+    : 0;
+  const effectiveHistoryIndex = historyLength > 0 ? sliderValue : null;
+  const selectedTimelineEntry = effectiveHistoryIndex !== null ? documentHistory[effectiveHistoryIndex] : null;
+  const isTimeTravelMode = historyLength > 0 && historyIndex !== null && historyIndex < historyLength - 1;
+  const effectiveContent = historyIndex === null
+    ? documentContent
+    : (selectedTimelineEntry?.content ?? documentContent);
+  const textareaValue = historyIndex === null ? documentContent : effectiveContent;
+  const canEditDocument = connectionStatus === 'connected' && Boolean(rpcRef.current) && !isTimeTravelMode;
   const formattedDocumentSync = lastDocumentSync ? new Date(lastDocumentSync).toLocaleString() : 'Never';
+  const timelinePositionLabel = historyLength ? `${sliderValue + 1}/${historyLength}` : '—';
+  const timelineStatusLabel = selectedTimelineEntry ? `${selectedTimelineEntry.user} • ${formatTimestamp(selectedTimelineEntry.timestamp)}` : 'No commits yet';
+  const legendEntries = Object.entries(authorColors).sort((a, b) => a[0].localeCompare(b[0]));
+  const showTimeline = historyLength > 0;
+  const showLegend = legendEntries.length > 0;
+  const fallbackUserName = userName.trim() || 'anonymous';
+  const fallbackAttribution = arrayFromString(textareaValue).map((char) => ({
+    char,
+    author: fallbackUserName
+  }));
+  const overlayAttribution = charAttribution.length > 0 ? charAttribution : fallbackAttribution;
+  const overlayLines: LineSegment[][] = toOverlayLines(overlayAttribution, fallbackUserName);
+  const overlayEmphasis = isTimeTravelMode ? 0.28 : 0.18;
 
   const leaveChannel = async () => {
     await unsubscribeFromRpc();
@@ -587,6 +941,11 @@ function App() {
     setActiveView('chat');
     setDocumentContent('');
     latestDocumentContentRef.current = '';
+    setDocumentHistory([]);
+    setHistoryIndex(null);
+    setCharAttribution([]);
+    setAuthorColors({});
+    authorColorIndexRef.current = 0;
     docCommitHashRef.current = null;
     setLastDocumentSync(null);
     setIsDocumentSyncing(false);
@@ -738,19 +1097,96 @@ function App() {
                         {isDocumentSyncing ? 'Syncing…' : 'Up to date'}
                       </div>
                     </div>
-                    <textarea
-                      value={documentContent}
-                      onChange={(e) => handleDocumentChange(e.target.value)}
-                      className="document-textarea"
-                      placeholder="Share notes, ideas, and drafts together..."
-                      disabled={!canEditDocument}
-                    />
+
+                    {showTimeline && (
+                      <div className="document-timeline">
+                        <div className="timeline-slider">
+                          <span className="timeline-label">History</span>
+                          <input
+                            type="range"
+                            min={0}
+                            max={sliderMax}
+                            value={sliderValue}
+                            onChange={(e) => handleHistorySliderChange(Number(e.target.value))}
+                          />
+                          <span className="timeline-position">{timelinePositionLabel}</span>
+                        </div>
+                        <div className="timeline-details">
+                          <span className="timeline-status">{timelineStatusLabel}</span>
+                          <div className="timeline-actions">
+                            {isTimeTravelMode ? (
+                              <button
+                                type="button"
+                                className="restore-button"
+                                onClick={handleRestoreVersion}
+                              >
+                                Restore this version
+                              </button>
+                            ) : (
+                              <span className="timeline-live">Live</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="document-editor-area">
+                      <div className="document-overlay" aria-hidden="true">
+                        {overlayLines.map((segments, lineIndex) => (
+                          <div key={`overlay-line-${lineIndex}`} className="overlay-line">
+                            {segments.map((segment, segmentIndex) => {
+                              const baseColor = authorColors[segment.author] ?? '#94a3b8';
+                              const tint = segment.text.length > 0
+                                ? hexToRgba(baseColor, overlayEmphasis)
+                                : 'transparent';
+                              return (
+                                <span
+                                  key={`overlay-chunk-${lineIndex}-${segmentIndex}`}
+                                  className="overlay-chunk"
+                                  style={{ backgroundColor: tint }}
+                                >
+                                  {segment.text || '\u00A0'}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        ))}
+                      </div>
+
+                      <textarea
+                        value={textareaValue}
+                        onChange={(e) => handleDocumentChange(e.target.value)}
+                        className="document-textarea"
+                        placeholder="Share notes, ideas, and drafts together..."
+                        disabled={!canEditDocument}
+                      />
+                    </div>
+
+                    {isTimeTravelMode && (
+                      <div className="timeline-warning">
+                        Viewing an earlier revision. Restore this version or slide to the end to resume editing.
+                      </div>
+                    )}
+
+                    {showLegend && (
+                      <div className="author-legend">
+                        {legendEntries.map(([author, color]) => (
+                          <div key={author} className="legend-item">
+                            <span className="legend-swatch" style={{ backgroundColor: color }} />
+                            <span className="legend-name">{author}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
                     <div className="document-hints">
                       {connectionStatus !== 'connected'
                         ? 'Reconnect to sync live edits.'
                         : !userName.trim()
                           ? 'Tip: add a display name so collaborators know who you are.'
-                          : 'Edits are saved automatically and shared with everyone in the channel.'}
+                          : isTimeTravelMode
+                            ? 'You are in history view. Restore or move the slider to the end to resume live editing.'
+                            : 'Edits are saved automatically and shared with everyone in the channel.'}
                     </div>
                   </div>
                 )}
