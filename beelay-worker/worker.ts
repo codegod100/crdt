@@ -1,11 +1,11 @@
-import init, { initSync } from "./test-wasm/subduction_wasm.js";
-import wasmModule from "./test-wasm/subduction_wasm_bg.wasm";
+import init, { initSync } from "../test-wasm/subduction_wasm.js";
+import wasmModule from "../test-wasm/subduction_wasm_bg.wasm";
 import {
   Beelay,
   MemorySigner,
   MemoryStorageAdapter,
-} from "./test-wasm/subduction_wasm.js";
-import { RpcTarget, newWebSocketRpcSession } from "./capnweb/dist/index.js";
+} from "../test-wasm/subduction_wasm.js";
+import { RpcTarget, newWebSocketRpcSession } from "../capnweb/dist/index.js";
 
 type StorageKey = string[];
 

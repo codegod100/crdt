@@ -1,127 +1,84 @@
-# CRDT Conflict-Free Replication Demo
+# CRDT Demo Workspace
 
-This project demonstrates Conflict-Free Replicated Data Types (CRDTs) using a Sedimentree-based Commit Graph CRDT implementation. It showcases automatic conflict resolution for collaborative document editing.
+This repository hosts a collection of CRDT exploration projects. The primary experience lives inside `webui/`, which bundles a SvelteKit interface and the Cloudflare Worker logic that serves it — Svelte routes, asset handling, and response hardening all run inside the same worker. For lower-level experiments there is also a standalone worker in `beelay-worker/`, plus supporting libraries and tooling.
 
-## Architecture
+## Project Layout
 
-- **CRDT Type**: Sedimentree-based Commit Graph CRDT with SHA-256 hashing
-- **Backend**: Cloudflare Worker with WebAssembly CRDT operations
-- **RPC**: capnweb for efficient WebSocket communication
-- **Frontend**: React-based web UI for interactive demonstrations
-- **CLI Client**: Node.js client for command-line demonstrations
+- `webui/` – Full‑stack app (SvelteKit + custom Cloudflare Worker wrapper) that bundles the SPA, injects security headers for asset responses, and proxies to the CRDT RPC backend.
+- `beelay-worker/` – Independent Worker that exposes the Beelay CRDT service for CLI demos or external consumers.
+- `capnweb/`, `keyhive/`, `subduction/`, … – Supporting TypeScript and Rust packages that provide RPC infrastructure and CRDT implementations used by the workers.
 
-## Components
+## WebUI (Full‑Stack Worker App)
 
-### Worker (`worker.ts`)
-Cloudflare Worker that handles CRDT operations using Beelay WebAssembly modules:
-- Document creation and management
-- Commit operations with automatic merging
-- Durable Object-based storage
-- WebSocket RPC endpoint
+The `webui` project ships everything required to run the UI on Cloudflare Workers:
 
-### Client (`client.ts`)
-Node.js command-line client that demonstrates CRDT functionality:
-- Creates shared documents
-- Performs concurrent edits
-- Shows automatic conflict-free merging
+| Capability | Implementation |
+| --- | --- |
+| Client UI | SvelteKit, Vite build pipeline |
+| Worker entrypoint | Custom `src/worker.ts` that wraps the generated SvelteKit worker, injects security headers, and routes WebSocket upgrades to the Beelay Durable Object |
+| Security headers | `$lib/security-headers.js` shared between hooks, worker, and generated `_headers` file |
+| Deployment bundle | `webui/wrangler.toml` targets `src/worker.ts` (which imports `.svelte-kit/cloudflare/_worker.js`) and associated assets |
 
-### Web UI (`webui/`)
-Browser-based interface for interactive CRDT demonstrations:
-- Real-time logging of operations
-- Visual demonstration of concurrent editing
-- WebSocket connection to worker backend
+### Local Development
 
-## Setup & Usage
-
-### Prerequisites
-- Node.js and pnpm
-- Cloudflare Workers CLI (`wrangler`)
-
-### 1. Install Dependencies
 ```bash
+cd webui
 pnpm install
+
+# Run the SvelteKit dev server
+pnpm dev -- --host
+
+# Preview the Worker (requires a build so `.svelte-kit` artifacts exist)
+pnpm build
+pnpm wrangler dev --remote
+
+# Optional: point to a live Beelay worker
+VITE_WORKER_URL=wss://your-worker.your-domain.workers.dev pnpm dev
 ```
 
-### 2. Start Cloudflare Worker
+For a full end-to-end experience you will also want the CRDT backend running — see the next section.
+
+### Building & Deploying
+
 ```bash
-# Terminal 1: Start the worker
-pnpm run client  # This runs the worker via wrangler dev
+cd webui
+pnpm build          # Builds the Svelte app
+pnpm wrangler deploy
 ```
 
-### 3. Run CLI Demo
+The build step regenerates `.svelte-kit/cloudflare/_headers` so the deployed worker and Pages asset routes apply the latest security policy.
+
+## Beelay Worker (Standalone Backend)
+
+`beelay-worker/` contains a Cloudflare Worker that embeds the CRDT engine (Beelay + WebAssembly) and exposes a WebSocket-capable RPC interface. It is primarily used by the CLI demo and as a local backend for the `webui` app when a self-hosted endpoint is required.
+
 ```bash
-# Terminal 2: Run the Node.js client demo
-pnpm run client
+cd beelay-worker
+pnpm install
+pnpm wrangler dev         # Local durable-object sandbox
 ```
 
-### 4. Run Web UI Demo
-```bash
-# Terminal 3: Start the web interface
-cd webui && pnpm dev
-# Open http://localhost:5173 in your browser
-```
+## Supporting Packages
 
-## CRDT Demonstration
+- `capnweb/` – Typed capability-RPC over WebSockets. Used by both the worker and clients.
+- `keyhive/` – Rust workspace with CRDT primitives, compiled to WebAssembly for worker use.
+- `subduction/`, `sqlite-wasm/`, etc. – Experimental components used by the demos.
 
-The demo shows a collaborative document editing scenario:
+Each package exposes its own README with deeper documentation and build instructions (`see AGENTS.md` for quick command references).
 
-1. **Document Creation**: Initial document with base content
-2. **Concurrent Editing**: Client and worker make simultaneous changes
-3. **Automatic Merging**: CRDT resolves conflicts without data loss
-4. **Final State**: All changes preserved in merged document
+## Quick Commands
 
-### Key Features Demonstrated
-- **Conflict-Free**: No edit conflicts or data loss
-- **Commutative**: Operations can be applied in any order
-- **Associative**: Grouping operations doesn't affect results
-- **Idempotent**: Duplicate operations are safe
+| Package | Build | Test |
+| --- | --- | --- |
+| `capnweb` | `cd capnweb && npm run build` | `cd capnweb && npm run test` |
+| `keyhive` | `cd keyhive && cargo build` | `cd keyhive && cargo test --features test_utils` |
+| `webui` | `cd webui && pnpm build` | _(Run Vite/Svelte tests as needed)_ |
+| `beelay-worker` | _N/A (TypeScript Worker)_ | _Covered by integration/manual testing_ |
 
-## Technical Details
+## Notes & Caveats
 
-### Sedimentree CRDT
-- **Structure**: Directed Acyclic Graph (DAG) of commits
-- **Integrity**: SHA-256 content hashing
-- **Merging**: Ancestry-based automatic conflict resolution
-- **Storage**: Binary content with hash verification
+- WebSocket endpoints: the `webui` client resolves its RPC target from `VITE_WORKER_URL`; when unset it falls back to the current origin (or `ws://localhost:8787` during localhost development). In local dev run `pnpm wrangler dev --remote` so the Durable Object backing the WebSocket RPC is available.
+- Playwright/browser tests are not wired up; prioritise build and type checks.
+- WebAssembly modules are bundled for Cloudflare Workers, with fallbacks for other environments.
 
-### WebAssembly Integration
-- Environment-aware initialization (bundled for Cloudflare Workers)
-- Fallback handling for environments without `import.meta.url`
-- Graceful degradation when WebAssembly unavailable
-
-### RPC Communication
-- capnweb for object-capability RPC
-- WebSocket transport for real-time communication
-- Promise pipelining for efficient batch operations
-
-## Development
-
-### Build Commands
-```bash
-# Build TypeScript (capnweb)
-cd capnweb && npm run build
-
-# Build Rust (keyhive workspace)
-cd keyhive && cargo build
-
-# Build Web UI
-cd webui && pnpm build
-```
-
-### Test Commands
-```bash
-# Test capnweb
-cd capnweb && npm run test
-
-# Test keyhive
-cd keyhive && cargo test --features test_utils
-```
-
-## Next Steps
-
-Potential enhancements for the CRDT system:
-- Real-time multi-client synchronization
-- Document encryption and access control
-- Complex CRDT operations (deletes, renames)
-- Performance optimization for large documents
-- Additional CRDT types and data structures
+For additional guidance (including coding standards and preferred tooling), consult `AGENTS.md`.

@@ -11,6 +11,24 @@ type DisposableStub = {
   [symbolDispose]?: () => void
 }
 
+function resolveWorkerUrl(): string {
+  const envUrl = import.meta.env.VITE_WORKER_URL;
+  if (envUrl && envUrl.trim().length > 0) {
+    return envUrl;
+  }
+
+  if (typeof window !== 'undefined') {
+    const { protocol, hostname, host } = window.location;
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+      return 'ws://localhost:8787';
+    }
+    const wsProtocol = protocol === 'https:' ? 'wss' : 'ws';
+    return `${wsProtocol}://${host}`;
+  }
+
+  return 'ws://localhost:8787';
+}
+
 interface CommitSnapshot {
   parents: string[];
   hash: string;
@@ -792,7 +810,7 @@ function App() {
     addLog(`🔎 Trying to join new channel by address: ${address.substring(0, 8)}...`);
     let tempRpc: RpcStub<BeelayApi> | null = null;
     try {
-      const workerUrl = import.meta.env.VITE_WORKER_URL || "ws://localhost:8787";
+      const workerUrl = resolveWorkerUrl();
       tempRpc = newWebSocketRpcSession<BeelayApi>(workerUrl);
       await tempRpc.hello('webui-join-lookup');
 
@@ -856,7 +874,7 @@ function App() {
     addLog(`🔌 Opening RPC session for channel ${channel.name}`);
 
     try {
-      const workerUrl = import.meta.env.VITE_WORKER_URL || "ws://localhost:8787";
+      const workerUrl = resolveWorkerUrl();
       const rpc = newWebSocketRpcSession<BeelayApi>(workerUrl);
       rpcRef.current = rpc;
       addLog(`🌐 Created WebSocket RPC stub targeting ${workerUrl}`);

@@ -25,6 +25,9 @@
 - **Environment-specific initialization**: Uses bundled WASM modules for Cloudflare Workers, import.meta.url for other environments
 - **Error messages**: Improved error handling provides clear messages about WebAssembly availability
 - **Build/lint focus**: Prioritize code compilation and linting; runtime execution now works in supported environments
+- **WebUI full-stack**: `webui/` packages both the SvelteKit UI and the Cloudflare Worker entrypoint (`src/worker.ts`) that injects security headers, serves assets, and exposes the WebSocket RPC endpoint.
+- **Wrangler configs**: Two `wrangler.toml` files exist — `beelay-worker/wrangler.toml` configures the standalone worker, while `webui/wrangler.toml` configures the SvelteKit UI deployment.
+- **Durable Objects**: The WebUI worker exports `BeelayDO`; use `wrangler dev --remote` if you need the Durable Object during local development.
 
 ## Code Style Guidelines
 
@@ -50,3 +53,4 @@
 - **Tests**: Write descriptive test names and use appropriate test frameworks
 - **Documentation**: No inline comments unless absolutely necessary
 - **Security**: Never commit secrets or expose sensitive information
+- **Wrangler configs**: Two independent Worker projects live side-by-side — `beelay-worker/wrangler.toml` configures the standalone worker, while `webui/wrangler.toml` belongs to the separate SvelteKit-based web UI project.

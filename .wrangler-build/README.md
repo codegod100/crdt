@@ -1,0 +1,1 @@
+This folder contains the built output assets for the worker "webui" generated at 2025-10-13T23:36:59.063Z.
