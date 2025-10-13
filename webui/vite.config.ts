@@ -7,6 +7,7 @@ export default defineConfig({
     target: 'esnext'
   },
   optimizeDeps: {
+    exclude: ['@sqlite.org/sqlite-wasm'],
     esbuildOptions: {
       target: 'esnext'
     }

@@ -81,16 +81,27 @@ class SQLiteService {
       // This requires COOP/COEP headers to be set
       console.log('Attempting to initialize with OPFS support...');
 
-      const promiser = await new Promise((resolve, reject) => {
-        const _promiser = (globalThis as any).sqlite3Worker1Promiser({
-          onready: () => resolve(_promiser),
-          onError: (err: any) => reject(err),
-        });
+      const workerPromiserFactory = (globalThis as any).sqlite3Worker1Promiser;
 
-        // Timeout after 5 seconds
-        setTimeout(() => {
+      if (typeof workerPromiserFactory !== 'function') {
+        throw new Error('sqlite3Worker1Promiser is not available');
+      }
+
+      const promiser = await new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
           reject(new Error('SQLite WASM initialization timeout'));
         }, 5000);
+
+        const workerPromiser = workerPromiserFactory({
+          onready: () => {
+            clearTimeout(timeoutId);
+            resolve(workerPromiser);
+          },
+          onerror: (err: any) => {
+            clearTimeout(timeoutId);
+            reject(err instanceof Error ? err : new Error(String(err?.message ?? err)));
+          }
+        });
       });
 
       console.log('SQLite WASM initialized with worker promiser');

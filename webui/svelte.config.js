@@ -4,7 +4,12 @@ import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 const config = {
   preprocess: vitePreprocess(),
   kit: {
-    adapter: adapter()
+    adapter: adapter({
+      // Use our custom worker that adds security headers to ASSETS responses
+      platformProxy: {
+        environment: undefined
+      }
+    })
   }
 };
 

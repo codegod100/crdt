@@ -1,8 +1,11 @@
 name = "webui"
-main = "./.svelte-kit/cloudflare/_worker.js"
-compatibility_date = "2025-10-10"
+# Point directly to SvelteKit's generated worker
+# Security headers are managed via _headers file and hooks.server.ts
+main = ".svelte-kit/cloudflare/_worker.js"
+compatibility_date = "2025-07-18"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
 [assets]
-directory = ".svelte-kit/cloudflare/assets"
+binding = "ASSETS"
+directory = ".svelte-kit/cloudflare"
