@@ -16,4 +16,4 @@ bindings = [
 
 [[migrations]]
 tag = "webui-v1"
-new_classes = ["BeelayDO"]
+new_sqlite_classes = ["BeelayDO"]

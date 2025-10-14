@@ -10,7 +10,7 @@ bindings = [
 
 [[migrations]]
 tag = "v1"
-new_classes = ["BeelayDO"]
+new_sqlite_classes = ["BeelayDO"]
 
 [build]
 #command = "npm run build"  # If you have a build step, otherwise remove

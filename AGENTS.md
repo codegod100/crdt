@@ -27,7 +27,7 @@
 - **Build/lint focus**: Prioritize code compilation and linting; runtime execution now works in supported environments
 - **WebUI full-stack**: `webui/` packages both the SvelteKit UI and the Cloudflare Worker entrypoint (`src/worker.ts`) that injects security headers, serves assets, and exposes the WebSocket RPC endpoint.
 - **Wrangler configs**: Two `wrangler.toml` files exist — `beelay-worker/wrangler.toml` configures the standalone worker, while `webui/wrangler.toml` configures the SvelteKit UI deployment.
-- **Durable Objects**: The WebUI worker exports `BeelayDO`; use `wrangler dev --remote` if you need the Durable Object during local development.
+- **Durable Objects**: The WebUI worker exports `BeelayDO` (registered via `new_sqlite_classes` so it works on free plans); use `wrangler dev --remote` if you need the Durable Object during local development.
 
 ## Code Style Guidelines
 

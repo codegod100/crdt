@@ -6,6 +6,7 @@ This repository hosts a collection of CRDT exploration projects. The primary exp
 
 - `webui/` – Full‑stack app (SvelteKit + custom Cloudflare Worker wrapper) that bundles the SPA, injects security headers for asset responses, and proxies to the CRDT RPC backend.
 - `beelay-worker/` – Independent Worker that exposes the Beelay CRDT service for CLI demos or external consumers.
+- Both workers use SQLite-based Durable Objects (`new_sqlite_classes`) so they deploy cleanly on free Cloudflare plans.
 - `capnweb/`, `keyhive/`, `subduction/`, … – Supporting TypeScript and Rust packages that provide RPC infrastructure and CRDT implementations used by the workers.
 
 ## WebUI (Full‑Stack Worker App)
