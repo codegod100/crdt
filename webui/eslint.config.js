@@ -7,7 +7,7 @@ import prettier from 'eslint-config-prettier';
 
 export default [
   {
-    ignores: ['react-src/**', '.svelte-kit/**']
+    ignores: ['.svelte-kit/**', '.wrangler/**']
   },
   js.configs.recommended,
   ...sveltePlugin.configs['flat/recommended'],

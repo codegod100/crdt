@@ -1,6 +1,6 @@
 # CRDT Web UI with SQLite Persistence
 
-A React-based web interface for demonstrating Conflict-Free Replicated Data Types (CRDTs) with local SQLite database persistence using SQLite WASM.
+A SvelteKit-based web interface for demonstrating Conflict-Free Replicated Data Types (CRDTs) with local SQLite database persistence using SQLite WASM.
 
 ## Features
 
@@ -104,7 +104,7 @@ The demo shows a collaborative document editing scenario with persistent storage
 
 ## Architecture
 
-- **Frontend**: React + TypeScript + Vite
+- **Frontend**: SvelteKit + TypeScript + Vite
 - **Database**: SQLite WASM with OPFS for persistence
 - **RPC**: capnweb for WebSocket-based remote procedure calls
 - **Backend**: Cloudflare Worker with WebAssembly CRDT implementation

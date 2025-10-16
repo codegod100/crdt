@@ -31,7 +31,7 @@ pnpm dev -- --host
 
 # Preview the Worker (requires a build so `.svelte-kit` artifacts exist)
 pnpm build
-pnpm wrangler dev --remote
+pnpm wrangler dev        # Durable Object runs locally via workerd
 
 # Optional: point to a live Beelay worker
 VITE_WORKER_URL=wss://your-worker.your-domain.workers.dev pnpm dev
@@ -78,7 +78,7 @@ Each package exposes its own README with deeper documentation and build instruct
 
 ## Notes & Caveats
 
-- WebSocket endpoints: the `webui` client resolves its RPC target from `VITE_WORKER_URL`; when unset it falls back to the current origin (or `ws://localhost:8787` during localhost development). In local dev run `pnpm wrangler dev --remote` so the Durable Object backing the WebSocket RPC is available.
+- WebSocket endpoints: the `webui` client resolves its RPC target from `VITE_WORKER_URL`; when unset it falls back to the current origin (or `ws://localhost:8787` during localhost development). In local dev run `pnpm wrangler dev` so the Durable Object backing the WebSocket RPC is available locally (use `--remote` only if you want to target Cloudflare's environment).
 - Playwright/browser tests are not wired up; prioritise build and type checks.
 - WebAssembly modules are bundled for Cloudflare Workers, with fallbacks for other environments.
 
